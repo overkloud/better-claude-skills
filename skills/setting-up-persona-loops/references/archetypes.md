@@ -12,7 +12,14 @@ does, and which adjacent role owns each thing it may not do.
 | **Product manager** | `pdm` | Own the core value and a frictionless path to it. Ruthlessly simplify across three dimensions (below): product features, design & UX, process. Triage every feature-request before it reaches the engineer; walk the shipped app; prune the backlog and the loop itself | Read everything (code, bus, journals, backlog, data); walk the app through the UI-verify harness (via a subagent); write proposals/specs; edit persona prompts' *process* sections with a dated note | Write application code, deploy, touch any env, remove shipped behavior without the user's approval, file a feature that does not name the need it serves | simplify/cut items → engineer (with the need + acceptance criteria); removals of shipped behavior, whole features, or a persona → user proposal; process changes that alter another role's remit → that role's prompt via a `to-user` proposal | ~3600 s; a full product walk weekly, backlog triage daily |
 | **Env operator / monitor** (one per non-prod env) | `dev` | Health monitor, self-heal per runbook, config levers, deploys, applying merged migrations, soak tracking, daily retro | Everything that *runs* the env; edit its own prompt and runbooks | Change application code or add migration files; touch the prod env | bug-report/feature-request → engineer (with evidence); approval-request → user after a passing soak; soak-report → research (pass or fail) | ~900 s + a persistent Monitor |
 | **Prod operator** | `prod` | Monitor the real env; execute user-approved items exactly as written; rollback | Sanctioned auto-fixes (restart), rollback (safe direction, no approval needed) | Edit prod config or secrets (also blocked by a hook), edit code, redeploy without an approved item, self-approve | live-report → research; bug-report → engineer; ops-issue → user | ~900 s + Monitor |
-| **App operator** (single-persona apps) | — (no bus) | Run the app's recurring human-adjacent workflows (data imports, reconciliation) and supervise its unattended jobs; keep an append-only ledger | Write through the app's API; hand-run or reload a job; write off a known gap in the ledger | Write features, deploy, direct SQL writes, run migrations, touch the other app | Exact human commands when a fact is needed (a credential, a pull) | per data rhythm (daily / weekly / monthly) |
+| **App operator** (no-bus apps; **required**) | `operator` (no bus) | Run the app's recurring human-adjacent workflows (data imports, reconciliation), supervise its unattended jobs, keep an append-only ledger, work the **non-technical** queue (`Owner: operator` tasks: docs, guides, bookkeeping, process, data fixes through the API), and keep custody of the shared comm (prune after 7 days, post unannounced guide-updates) | Write through the app's API; hand-run or reload a job; write off a known gap in the ledger; edit any doc or guide | Write features or anything under the code dirs, deploy, direct SQL writes, run migrations, touch the other app | Exact human commands when a fact is needed (a credential, a pull); code needs → `Owner: eng` | ~900 s + the data rhythms (daily / weekly / monthly) |
+
+**The pod: a required pair plus options.** The live sessions of one app form a
+pod. The **operator and the engineer are required** — the loop is live only
+when both heartbeats are fresh, and each watches the other's (`down` to the
+comm, headline, tell the user; no persona restarts another). Every other role
+is optional; a down optional role means its queue waits, not that another role
+absorbs its remit. Arm the pair first.
 
 **Why operator and implementer are separate sessions:** an operator must stay
 responsive on a short poll and never be mid-refactor when the system wedges;
@@ -124,6 +131,7 @@ lever. Do not collapse them into one deploy.
 | Work-item bus | `next/`, `done/`, frontmatter items | every role, by address | edit rights per PROTOCOL; machine-readable |
 | Narrative journal | one file per day, `# <date> (<role>)` sections | every role appends its own section | **append-only; never overwrite the day-file** — another role journals in the same file |
 | Operator ledger | one file, **standing facts table at the top**, dated entries newest-first below | the app operator | append-only; no secrets or account identifiers; a clean night needs no entry |
+| Shared comm | `comm/YYYY-MM-DD.md`, one file per day, `## HH:MM from → to · kind: subject` entries | every pod member appends; the operator prunes | **transient** — deleted after 7 days; read every wake; `guide-update` → the named persona re-arms; nothing of record (`comm-readme-template.md`) |
 
 Read a ledger from the **head** (standing facts + first entries); tail-reads miss
 same-day entries.
@@ -137,6 +145,11 @@ When one persona works an app's task backlog alone:
 - **Claim** = set the task file's `Status:` line to `in-progress` and commit it
   (pathspec-limited) before touching code. The committed status line is the lock;
   stray working-tree changes you did not make are another session's in-flight work.
+- **Owner** = the task's `Owner:` line (right under `Status:`) routes it between the
+  required pair: `operator` for non-technical work (docs, guides, index bookkeeping,
+  process, data fixes through the API), `eng` — the default when the line is absent
+  — for anything touching code. Either side hands a misrouted task back by flipping
+  the line with a dated note and `Status: todo`.
 - **Actionable is decided by reading** every task's Status line each wake, never
   by counting files. A bare `todo` is actionable; a task is blocked only if its
   Status names the gate and how to probe it, and every wake re-probes each gate.
@@ -156,8 +169,11 @@ When one persona works an app's task backlog alone:
 - Production safety: a real-money or otherwise user-gated env changes only through an
   approved item; its config files are hook-protected; rollback is always allowed.
 - Shared resources (one DB across worktrees, one checkout across sessions): never
-  migrate from a worktree; pathspec-limit commits; re-list sequence numbers right
-  before filing.
+  migrate from a worktree; sync `merge --ff-only` and commit named paths only —
+  enforced by `references/shared-checkout-guard.py` as a tracked PreToolUse hook,
+  because the prose rule alone failed within a day of a third session joining;
+  re-list sequence numbers right before filing. A breach is a dated Traps entry in
+  the offender's prompt, written by whoever caught it, not a report to the user.
 - Scheduled jobs run **deployed** code from the env's pinned checkout, never a
   branch HEAD; each job is registered in one scheduled-jobs doc naming the persona
   that watches it.

@@ -89,8 +89,15 @@ and are never deleted.
 
 ## Cycle (every wake)
 
-1. `git pull --rebase`; re-arm session-only tasks if this is a fresh session.
-   On a fresh session also **reconcile recorded state against reality** before
+1. Sync fast-forward-only — `git fetch -q origin && git merge --ff-only
+   origin/main` (exit `0` synced; `1` a neighbour holds the file that moved:
+   work from the current sha and say so; `128` real divergence: stop and tell
+   the user — see "Shared checkout"). Then liveness: touch your heartbeat,
+   renew the session cron at day 6, read the other required persona's
+   heartbeat (see "Liveness and re-arm"). Then the **shared comm** read (see
+   "Shared comm"): a `guide-update` naming this file is a re-arm before
+   anything else this wake. Re-arm session-only tasks if this is a fresh
+   session. On a fresh session also **reconcile recorded state against reality** before
    acting: the sha actually deployed vs. CURRENT STATE, health now, open
    incidents, and any `in-progress` item addressed to your role (it is yours
    to resume — a predecessor died mid-work; a deploy recorded as started but
@@ -136,11 +143,124 @@ This session runs on `<recommended tier>` (set with `/model` when arming).
 Doing the work inline "because it is only a few files" is how a predecessor
 filled its context by mid-day and died with an item `in-progress`.
 
+## Liveness and re-arm — the required pair watches itself   <!-- every role -->
+
+The pod's **required personas are the <operator> and the <engineer>**; the
+loop is live only when both heartbeats are fresh. <Optional roles> are
+optional — their queues wait while they are down. The cadence is a session
+cron, and session crons auto-expire 7 days after creation, silently. State
+lives in `~/.<app>/`:
+
+- **Heartbeat** — every tick, first:
+  `mkdir -p ~/.<app> && date "+%F %T %Z" > ~/.<app>/<role>-heartbeat`.
+- **Cron self-renewal** — `~/.<app>/<role>-cron` records `<id> <YYYY-MM-DD>`;
+  at ≥ 6 days CronDelete, CronCreate (same fire prompt, off-minute pattern),
+  rewrite. **Backstop**: CronList every tick; missing → recreate. If you are
+  running a wake by hand (a human prompted you) and `CronList` is empty, you
+  are **armed but not looping** — the most silent failure there is, because
+  everything you do looks normal. Say so in the cycle output and tell the
+  user: starting `/loop` is theirs, and no neighbour can see this until your
+  heartbeat goes absent or stale.
+- **The other required persona** <!-- operator and engineer only -->: read
+  `~/.<app>/<other>-heartbeat`. **Two different failures, and the file tells
+  them apart — do not collapse them:**
+  - **ABSENT** (no such file) → `down` **at once, with no second test**. It
+    means that session is not looping at all: never armed with `/loop`, or
+    armed before this section existed. The commit-since check below exists
+    only to keep a *stale* timestamp from crying wolf; there is no timestamp
+    here to be generous about, and absent is the **worse** state — stale says
+    it ran and died, absent says it never ran. Never explain it away as "the
+    check is newer than that session": that reasoning never expires on its
+    own, and it is how an unlooped persona stays invisible for weeks.
+  - **STALE** (file exists) → `down` when older than <45> minutes **and** no
+    commit on `main` since (age alone cries wolf — sessions commit between
+    heartbeats).
+
+  **This is the only check in the system that can catch a never-looped
+  persona, so it has to hold.** A session's own `CronList` backstop cannot:
+  it runs on a tick, and a session that was never `/loop`ed never ticks. Its
+  self-repair is unreachable from inside. The neighbour's absent-heartbeat
+  read is the whole safety net.
+
+  When down either way: post `down` to the shared comm, headline it in the
+  cycle output, tell the user. Never touch its claimed item or worktree — the
+  claim is what a fresh session resumes — and never restart another session.
+- **Re-arm on a guide-update** — a comm `guide-update` naming this file means
+  the rules changed under you: re-read this entire file from disk in that
+  wake, re-run this section against the new text, post
+  `ack: <role> re-armed at <sha>`.
+- **Session death** cannot be self-healed: the user pastes this prompt into a
+  fresh session and `/loop <interval>`; the first tick recreates the on-disk
+  records. Nothing is lost — everything of record is in git.
+
+## Shared comm — the pod's transient channel      <!-- every role -->
+
+`docs/operation/<app>/comm/YYYY-MM-DD.md`; format and kinds in
+`comm/README.md`. One file per day, append-only, tracked, committed at once
+(`comm:` prefix, named paths). Every wake after the sync, read today's and
+yesterday's files and act on entries newer than `~/.<app>/<role>-comm-read`
+addressed to `<role>` or `pod`. Post there what a neighbour needs within a
+wake — a `guide-update` whenever you change any `*-loop-prompt.md` (file +
+sha), `down`, `breach`, `handoff`, `note` — and nothing of record: rules go
+into guides, facts into the ledger, work into task or bus items. <Operator
+only:> You are the custodian: post the `guide-update` for any guide commit
+nobody announced, and `git rm` day-files older than 7 days each cycle.
+
+## Operator-owned tasks — the non-technical queue   <!-- operator -->
+
+A task file whose `Owner:` line (right under `Status:`) says `<operator>` is
+yours: docs, runbooks, guides, index bookkeeping, process items, data
+corrections through the app's API, ledger records — anything that needs no
+change under `<code dirs>`. Each wake after the job checks:
+`grep -l "^Owner: <operator>" <todo dir>/<app>_*.md`, read each `Status:`
+line, claim the highest-priority actionable one (`in-progress`, commit), do
+it, move it to `done/` with an `## Outcome`, update the index. Drain the
+queue in the same wake. A task that turns out to need code goes back to
+`todo` with `Owner: <engineer>` and a dated note saying why. No `Owner:`
+line means the engineer's.
+
+## Shared checkout — the git rules                <!-- every role sharing a working tree -->
+
+<N> sessions (<roles>) edit this working tree at once. Nothing but discipline
+keeps their uncommitted work apart, so these rules are enforced by the
+checked-in hook (`bin/shared-checkout-guard`, wired in `.claude/settings.json`,
+`--test` self-checks it) and hold in every worktree of this repo:
+
+- **Sync fast-forward-only**: `git fetch -q origin && git merge --ff-only
+  origin/main`. Never `git pull --rebase` — it refuses whenever *any* file is
+  dirty, which is the normal state here, so it silently skips the sync — and
+  never `--autostash`: the stash stack is shared and it pockets a neighbour's
+  work. Exit `0` synced (a neighbour's dirty files untouched); `1` a neighbour
+  is mid-edit on the file that moved — work from the current sha, re-sync next
+  wake, say so; `128` real divergence — stop and tell the user.
+- **Commit named paths only**: `git add -- <paths>`, `git commit -m … --
+  <paths>`. Never `add -A`, `add .`, `add -u`, `commit -a`/`-am`. A dirty file
+  you did not write is a neighbour's in-flight work; an untracked task file is
+  a filing, not litter.
+- **Never stash, `reset --hard`, `clean`, or `checkout`/`restore .`** — each
+  destroys or pockets work that is not yours.
+- **Re-read a file immediately before editing it** — the tree moves under you
+  between wakes.
+
+**If your files went clean without your commit, a neighbour swept them**:
+`git log -3 --stat -- <your file>` finds the commit. Verify every insertion
+you made is on `main` intact; never rewrite the commit (it is already shared).
+Record in your ledger/journal where the content landed, and append a dated
+entry to the offending persona's "Traps that have already bitten" — that
+prompt is its memory and the only channel that reaches its next wake. A
+protocol breach is not a remit change, so it needs no `to-user` proposal; the
+user hears of it only when it recurs. (Added <date> after a `docs(<role>)`
+commit swept another persona's half-written ledger.)
+
 ## Idle behavior — work the P-queue                <!-- engineer -->
 
 With no `to: <x>` item open, pick the highest-priority open backlog task
 (`<todo dir>/<app>_<priority>_<slug>.md`, filename prefix = app filter) and run
-it through the same pipeline. Order P1 → P2 → P3; there is no P0.
+it through the same pipeline. Order P1 → P2 → P3; there is no P0. A task
+whose `Owner:` line says `<operator>` is the operator's non-technical work —
+skip it, never claim it; no `Owner:` line means yours. A task you hold that
+turns out to need no code goes back to `todo` with `Owner: <operator>` and a
+dated note.
 "Actionable" is decided by READING every task's `Status:` line each wake —
 `grep -HiE "^(\*\*)?Status" <todo dir>/<app>_*.md` — never by remembering or
 counting files. A task is blocked only if its Status names the gate (what it
@@ -262,6 +382,25 @@ append the rule here — dated, with the one-line cause — in the same change a
 the fix; when a check or query turns out wrong, correct it here, not just in
 the journal. Move superseded state to "Previous state"; never delete a rule
 to shorten the file.
+
+## Shutdown — standing this session down        <!-- every role -->
+
+Closing this session is not closing the window. Stop the loop and delete this
+session's cron first, then close or park every item you claimed (never leave
+one `in-progress`), copy each session-only invocation into RE-ARM before
+deleting it, write a fresh `## CURRENT STATE` block here, journal it, commit
+named paths and push. **Leave your heartbeat file where it is** — absent means
+"never looped", the worst state in the liveness taxonomy; a stale heartbeat
+plus your ack is what tells the pod this was deliberate. Post
+`ack: <role> stood down at <HH:MM>` to the comm before you stop, and say which
+env is unmonitored from what time. Procedure: the
+`shutting-down-current-persona` skill.
+
+A `shutdown` entry in the comm addressed to you or `pod` is that order arriving
+from the user: stand down **in that wake**, ahead of your other work. <Operator
+only:> you go last — the pod's acks are yours to collect and the leftovers yours
+to file. A neighbour whose `ack: … stood down` you have seen is stood down, not
+`down`: post no `down` for it.
 
 ## Boundaries
 

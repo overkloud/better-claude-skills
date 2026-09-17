@@ -25,6 +25,11 @@ and take no items from this bus.
 - `next/` — open items.
 - `done/` — finished items (moved here with an `## Outcome` section).
 
+The bus is not the pod's chat. What a neighbour needs *this wake* — a guide
+changed, a required persona is down, a breach — goes to the shared comm
+(`docs/operation/<app>/comm/`, transient, pruned after 7 days); the bus
+carries work items with a status and edit rights.
+
 ## Filename
 
 `YYYY-MM-DD-NN-to-<role>-<slug>.md`
@@ -79,10 +84,14 @@ so in the body and sorts first within P1; any other token is malformed (rule 6).
 3. **Approval-requests** name the exact sha, the exact config diff (every
    changed `KEY=VALUE` line), the cost cap, and the transition. Anything
    ambiguous fails closed: the executor rejects and asks instead of guessing.
-4. **Publish immediately.** Every session `git pull --rebase`s at cycle start
-   and commits its bus changes right away in bus-only commits (message prefix
-   `journal:`), pathspec-limited so a shared checkout's stray changes stay
-   untouched.
+4. **Publish immediately.** Every session syncs at cycle start with
+   `git fetch -q origin && git merge --ff-only origin/main` (never
+   `pull --rebase`: it refuses whenever any file in a shared checkout is
+   dirty and silently skips the sync) and commits its bus changes right away
+   in bus-only commits (message prefix `journal:`), **naming the paths**
+   (`git commit -- <paths>`; never `add -A` / `commit -a`) so a shared
+   checkout's stray changes stay untouched. The guard hook in the persona
+   recipe refuses the broad forms.
 5. **Staleness.** An `in-progress` item untouched > 24 h is flagged by
    whichever session notices, as a `to-user` `ops-issue`.
 6. **Malformed items** (bad frontmatter, missing acceptance criteria, wrong
