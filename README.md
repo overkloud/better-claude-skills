@@ -29,3 +29,7 @@ ln -s "$(pwd)/skills/setting-up-persona-loops" ~/.claude/skills/setting-up-perso
 ## Contributing
 
 No personal data, credentials, hostnames, or project-specific identifiers go in this repo. Keep skills generic.
+
+## License
+
+[MIT](LICENSE)
