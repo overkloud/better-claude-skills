@@ -1,0 +1,324 @@
+#!/usr/bin/env bash
+# claude-sessions — snapshot the running Claude Code sessions, reopen them in iTerm2.
+#
+#   save [--from-hook]   write ~/.claude/session-snapshot.json (hooks call this)
+#   list                 show the snapshot
+#   restore [--dry-run]  reopen every snapshotted session in its iTerm2 window/tab/pane
+#
+# Requires macOS, iTerm2, jq and Claude Code. Keep the snapshot current by
+# running `claude-sessions save --from-hook` from Claude Code's SessionStart and
+# SessionEnd hooks (tools/install.sh prints the settings.json snippet). After a
+# reboot or crash, `claude-sessions restore` brings the sessions back.
+#
+# Environment:
+#   CLAUDE_CONFIG_DIR       Claude Code config dir (default ~/.claude)
+#   CLAUDE_SESSIONS_LOG     log file (default ~/.log/claude-sessions.log)
+#   CLAUDE_SESSIONS_DELAY   seconds between tab launches on restore (default 0.6)
+#
+# Every run, hook-driven ones included, logs to CLAUDE_SESSIONS_LOG. Check it
+# first when a save or restore misbehaves.
+#
+# Claude Code keeps a live registry at ~/.claude/sessions/<pid>.json holding each
+# session's id, name and cwd. `save` copies the still-running entries out of it;
+# after a reboot that copy is the only record of what was open.
+#
+# Layout: each session's pid owns a tty, and every iTerm2 pane reports its tty, so
+# the two join to give window/tab/pane per session.
+#
+# Windows and tabs are reproduced exactly. Splits within a tab are NOT: iTerm2
+# gives no pane coordinates (`position`/`size` on a session fail with -1728), only
+# rows/columns, so a pane's left/right/above/below relationship is unknowable. Two
+# equally sized panes are ambiguous in principle. Orientation is therefore guessed
+# — equal width means stacked, equal height means side by side — which is right for
+# a simple one-way split and approximate for a nested tree. Sessions still land in
+# the correct window and tab, which is the part that carries the grouping.
+
+# -E carries the ERR trap below into functions, so no `set -e` exit goes unlogged.
+set -Eeuo pipefail
+
+CLAUDE_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+LIVE_DIR="$CLAUDE_DIR/sessions"
+SNAPSHOT="$CLAUDE_DIR/session-snapshot.json"
+DELAY="${CLAUDE_SESSIONS_DELAY:-0.6}"   # seconds between tab launches
+LOG="${CLAUDE_SESSIONS_LOG:-$HOME/.log/claude-sessions.log}"
+
+# Every run appends "start ..." and "end rc=N" plus its decisions, so a hook
+# killed mid-save shows up as a start with no end. Not named `log`: that would
+# shadow macOS's /usr/bin/log.
+logmsg() { printf '%s [%s] %s\n' "$(date '+%F %T')" "$$" "$*" 2>/dev/null >> "$LOG" || true; }
+mkdir -p "${LOG%/*}" 2>/dev/null || true
+if [ -f "$LOG" ] && [ "$(wc -c < "$LOG")" -gt 1000000 ]; then mv -f "$LOG" "$LOG.1"; fi
+# -E also hands the trap to $(...) subshells, where a failure is often expected
+# and handled by a `|| ...` outside; only the top level reports, and a real
+# failure always surfaces there.
+trap 'rc=$?; [ "$BASH_SUBSHELL" != 0 ] || { logmsg "FAILED rc=$rc line $LINENO: $BASH_COMMAND"
+      printf "claude-sessions: failed (rc=%s) at line %s: %s — see %s\n" "$rc" "$LINENO" "$BASH_COMMAND" "$LOG" >&2; }' ERR
+trap 'logmsg "end rc=$?"' EXIT
+
+die() { logmsg "die: $*"; printf 'claude-sessions: %s\n' "$*" >&2; exit 1; }
+# printf to the terminal, and record the same line in the log.
+say() { local m; m=$(printf "$@"); printf '%s\n' "$m"; logmsg "$m"; }
+
+# A pid counts as live only if it is still a claude process — pids get recycled,
+# and a stale sessions/<pid>.json outlives the reboot that killed its owner.
+# Launched via the ~/.local/bin/claude symlink, comm is "claude"; launched
+# directly (background jobs, forks) it is the real binary, .../claude/versions/X.Y.Z.
+is_live_claude() {
+  local comm
+  comm=$(ps -p "$1" -o comm= 2>/dev/null) || return 1
+  case $comm in claude|*/claude|*/claude/versions/*) return 0 ;; *) return 1 ;; esac
+}
+
+# Populates the global LIVE_FILES array with live sessions/<pid>.json paths.
+collect_live_files() {
+  local f pid
+  LIVE_FILES=()
+  for f in "$LIVE_DIR"/*.json; do
+    [ -e "$f" ] || continue
+    pid=${f##*/}; pid=${pid%.json}
+    case $pid in ''|*[!0-9]*) continue ;; esac
+    # if, not &&: a dead last pid would leave the loop (and so this function)
+    # returning 1, and `set -e` then kills the caller without a word.
+    if is_live_claude "$pid"; then
+      LIVE_FILES+=("$f")
+    else
+      logmsg "not live: $f (comm=$(ps -p "$pid" -o comm= 2>/dev/null || echo gone))"
+    fi
+  done
+  logmsg "live sessions: ${#LIVE_FILES[@]}"
+}
+
+# {"/dev/ttysNNN": {window,tab,pane,rows,cols}, ...} for every iTerm2 pane, or {}.
+# Never launches iTerm2: `tell application` would auto-start it, which must not
+# happen from a hook in an ssh or tmux session.
+iterm_pane_map() {
+  local raw
+  # awk, not `grep -q`: grep exits on first match, SIGPIPEs ps, and under
+  # `set -o pipefail` the whole pipeline then reports failure.
+  [ "$(ps -eo comm= | awk -F/ '$NF == "iTerm2" {f = 1} END {print f + 0}')" = 1 ] ||
+    { logmsg "iTerm2 not running: saving without layout"; printf '{}'; return 0; }
+  raw=$(osascript 2>>"$LOG" <<'APPLESCRIPT'
+tell application "iTerm2"
+  set out to ""
+  set ws to (get id of every window)
+  repeat with i in ws
+    set w to (first window whose id is i)
+    set ti to 0
+    repeat with t in tabs of w
+      set ti to ti + 1
+      set pi to 0
+      repeat with s in sessions of t
+        set pi to pi + 1
+        -- "|" not tab: inside a tell block the word `tab` binds to the iTerm2 tab
+        -- class, so it stringifies to the literal text "tab".
+        set out to out & (i as string) & "|" & ti & "|" & pi & "|" & ¬
+          (rows of s) & "|" & (columns of s) & "|" & (tty of s) & linefeed
+      end repeat
+    end repeat
+  end repeat
+  return out
+end tell
+APPLESCRIPT
+  ) || { logmsg "iTerm2 pane query failed (error above): saving without layout"; printf '{}'; return 0; }
+  printf '%s' "$raw" | jq -R -s '
+    split("\n") | map(select(length > 0) | split("|"))
+    | map(select(length == 6))
+    | map({key: .[5], value: {window: (.[0] | tonumber), tab: (.[1] | tonumber),
+                              pane: (.[2] | tonumber), rows: (.[3] | tonumber),
+                              cols: (.[4] | tonumber)}})
+    | from_entries' 2>/dev/null || printf '{}'
+}
+
+cmd_save() {
+  local exclude="" hook_json=""
+  if [ "${1:-}" = --from-hook ]; then
+    hook_json=$(cat)
+    logmsg "hook: $(printf '%s' "$hook_json" |
+      jq -r '"\(.hook_event_name) \(.reason // .source // "-") session=\(.session_id)"')"
+    # reason "other" means the session was killed, not exited: its tab closed,
+    # iTerm2 quit or crashed, the Mac rebooted. Leave the snapshot alone, since
+    # it holds the state restore should bring back. Saving here would shrink it
+    # to nothing as each dying session in turn dropped itself.
+    [ "$(printf '%s' "$hook_json" | jq -r '"\(.hook_event_name)/\(.reason)"')" != SessionEnd/other ] ||
+      { logmsg "killed, not exited: snapshot kept"; return 0; }
+    # A deliberate exit (/exit, /clear, ...) fires while the process is still
+    # alive; drop it here so the snapshot reflects what keeps running.
+    exclude=$(printf '%s' "$hook_json" |
+      jq -r 'if .hook_event_name == "SessionEnd" then .session_id else empty end')
+  fi
+
+  collect_live_files
+  local tmp="$SNAPSHOT.tmp.$$"
+  if [ ${#LIVE_FILES[@]} -eq 0 ]; then
+    jq -n '{savedAt: (now | todate), sessions: []}' > "$tmp"
+    mv "$tmp" "$SNAPSHOT"
+    logmsg "saved: 0 session(s)"
+    return 0
+  fi
+
+  # Read each registry file once and skip any that vanished meanwhile: a session
+  # exiting right now deletes its own file, and a missing input makes jq exit 2
+  # after writing $tmp, so `set -e` used to drop the save before the mv.
+  # sessionId -> /dev/ttysNNN is the join key between a session and its iTerm2 pane.
+  local f pid sid tty entry live_json="" pairs="" ttymap
+  for f in "${LIVE_FILES[@]}"; do
+    entry=$(jq -c . "$f" 2>/dev/null) || { logmsg "vanished or unreadable, skipped: $f"; continue; }
+    live_json+="$entry"$'\n'
+    pid=${f##*/}; pid=${pid%.json}
+    tty=$(ps -p "$pid" -o tty= 2>/dev/null | tr -d ' ') || true
+    [ -n "$tty" ] && [ "$tty" != '??' ] || continue
+    sid=$(printf '%s' "$entry" | jq -r .sessionId)
+    pairs+="$sid"$'\t'"/dev/$tty"$'\n'
+  done
+  ttymap=$(printf '%s' "$pairs" | jq -R -s '
+    split("\n") | map(select(length > 0) | split("\t"))
+    | map({key: .[0], value: .[1]}) | from_entries')
+
+  printf '%s' "$live_json" |
+  jq -s --arg ex "$exclude" --argjson ttys "$ttymap" --argjson panes "$(iterm_pane_map)" '{
+    savedAt: (now | todate),
+    sessions: [ .[]
+      | select(.kind == "interactive")
+      | select(.sessionId != $ex)
+      | {id: .sessionId, name: (.name // ""), cwd: .cwd, startedAt: .startedAt}
+      | . + (($panes[$ttys[.id] // ""] // null) as $l
+             | if $l == null then {} else {layout: $l} end) ]
+      | unique_by(.id)
+  }' > "$tmp"
+  mv "$tmp" "$SNAPSHOT"
+  logmsg "saved: $(jq -r '"\(.sessions | length) session(s), \([.sessions[] | select(.layout)] | length) with layout"' "$SNAPSHOT")"
+}
+
+cmd_list() {
+  [ -f "$SNAPSHOT" ] || die "no snapshot yet at $SNAPSHOT"
+  jq -r '"saved \(.savedAt)  —  \(.sessions | length) session(s)",
+         (.sessions[] | "  \(.name // "(unnamed)")\t\(.cwd)\t\(.id)")' "$SNAPSHOT" |
+    column -t -s $'\t'
+}
+
+# Escape a string for embedding in an AppleScript double-quoted literal.
+as_esc() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'; }
+
+# osascript errors go to the terminal and the log; the ERR trap records the call.
+osa() { osascript "$@" 2> >(tee -a "$LOG" >&2); }
+
+cmd_restore() {
+  local dry=0
+  [ "${1:-}" = --dry-run ] && dry=1
+  [ -f "$SNAPSHOT" ] || die "no snapshot yet at $SNAPSHOT"
+  command -v claude >/dev/null || die "claude not found on PATH"
+
+  # Sessions already running right now must not be opened a second time.
+  local running=" " f
+  collect_live_files
+  for f in ${LIVE_FILES[@]+"${LIVE_FILES[@]}"}; do
+    running+="$(jq -r .sessionId "$f" 2>/dev/null || true) "   # it may exit meanwhile
+  done
+
+  local group action id name cwd cmdline wid=0 curgroup="" opened=0 skipped=0
+  while IFS=$'\t' read -r group action id name cwd; do
+    [ -n "$id" ] || continue
+    if [ "${running#* $id }" != "$running" ]; then
+      say 'skip  %s — already running' "${name:-$id}"; skipped=$((skipped + 1)); continue
+    fi
+    if [ ! -d "$cwd" ]; then
+      say 'skip  %s — directory gone: %s' "${name:-$id}" "$cwd"; skipped=$((skipped + 1)); continue
+    fi
+    # Without this, an unresumable id just makes claude exit and the tab vanish.
+    if ! compgen -G "$CLAUDE_DIR/projects/*/$id.jsonl" >/dev/null; then
+      say 'skip  %s — no transcript on disk' "${name:-$id}"; skipped=$((skipped + 1)); continue
+    fi
+
+    cmdline="cd $(printf '%q' "$cwd") && claude --resume $(printf '%q' "$id")"
+    [ -n "$name" ] && cmdline+=" --name $(printf '%q' "$name")"
+
+    # A new window group always starts a window; so does the first surviving
+    # session overall, in case the row that was meant to open the window got
+    # skipped above.
+    if [ "$group" != "$curgroup" ] || [ "$wid" = 0 ]; then
+      action=WINDOW
+    elif [ "$action" = WINDOW ]; then
+      action=TAB
+    fi
+
+    if [ "$dry" = 1 ]; then
+      say 'would %-6s %s' "$action" "$cmdline"
+      curgroup="$group"; wid=1; opened=$((opened + 1)); continue
+    fi
+
+    case "$action" in
+      WINDOW)
+        # Keep the window id so later tabs and splits land here even if the
+        # user clicks away mid-restore.
+        wid=$(osa -e 'tell application "iTerm2"' \
+                  -e 'activate' \
+                  -e 'set w to (create window with default profile)' \
+                  -e "tell current session of w to write text \"$(as_esc "$cmdline")\"" \
+                  -e 'return id of w' \
+                  -e 'end tell')
+        ;;
+      TAB)
+        osa -e 'tell application "iTerm2"' \
+            -e "tell (first window whose id is $wid)" \
+            -e 'set t to (create tab with default profile)' \
+            -e "tell current session of t to write text \"$(as_esc "$cmdline")\"" \
+            -e 'end tell' -e 'end tell'
+        ;;
+      SPLITH|SPLITV)
+        local dir=horizontally
+        [ "$action" = SPLITV ] && dir=vertically
+        osa -e 'tell application "iTerm2"' \
+            -e "tell (first window whose id is $wid)" \
+            -e 'tell current session of current tab' \
+            -e "set s to (split $dir with default profile)" \
+            -e 'end tell' \
+            -e "tell s to write text \"$(as_esc "$cmdline")\"" \
+            -e 'end tell' -e 'end tell'
+        ;;
+    esac
+    curgroup="$group"
+    say '%-6s %s  (%s)  window=%s' "$action" "${name:-$id}" "$cwd" "$wid"
+    opened=$((opened + 1))
+    sleep "$DELAY"
+  done < <(jq -r '
+    [ .sessions | to_entries[] | .key as $k | .value as $s
+      | {id: $s.id, name: $s.name, cwd: $s.cwd,
+         w: ($s.layout.window // 0),
+         t: ($s.layout.tab // (1000 + $k)),   # unplaced sessions each get their own tab
+         p: ($s.layout.pane // 1),
+         rows: ($s.layout.rows // 0), cols: ($s.layout.cols // 0)} ]
+    | sort_by(.w, .t, .p)
+    | group_by(.w)
+    | map(group_by(.t)
+          | to_entries
+          | map(.key as $ti | .value as $panes
+                | ($panes | map(.cols) | max) as $maxc
+                | ($panes | map(.cols) | unique | length) as $ucols
+                | ($panes | map(.rows) | unique | length) as $urows
+                | ($panes | to_entries | map(.key as $pi | .value as $s
+                    | $s + {action:
+                        (if   $ti == 0 and $pi == 0 then "WINDOW"
+                         elif $pi == 0              then "TAB"
+                         elif $ucols == 1           then "SPLITH"   # equal width  -> stacked
+                         elif $urows == 1           then "SPLITV"   # equal height -> side by side
+                         elif $s.cols < $maxc       then "SPLITV"
+                         else "SPLITH" end)})))
+          | flatten)
+    | flatten
+    | .[] | [(.w | tostring), .action, .id, .name, .cwd] | @tsv' "$SNAPSHOT")
+
+  printf '\n'; say '%d opened, %d skipped' "$opened" "$skipped"
+}
+
+USAGE="usage: claude-sessions {save [--from-hook] | list | restore [--dry-run]}"
+
+logmsg "start $*"
+case "${1:-}" in -h|--help) printf '%s\n' "$USAGE"; exit 0 ;; esac
+# Without jq every command dies mid-pipeline with a cryptic trap message.
+command -v jq >/dev/null || die "jq is required (brew install jq)"
+case "${1:-}" in
+  save)    shift; cmd_save "$@" ;;
+  list)    shift; cmd_list "$@" ;;
+  restore) shift; cmd_restore "$@" ;;
+  *) die "$USAGE" ;;
+esac

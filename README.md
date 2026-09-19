@@ -10,6 +10,14 @@ A collection of Claude Code skills and settings.
 | [`shutting-down-current-persona`](skills/shutting-down-current-persona/SKILL.md) | Stand down the persona armed in the current session — stop the loop, close or park claimed work, write the handover — so the session can be closed safely. |
 | [`shutting-down-all-personas`](skills/shutting-down-all-personas/SKILL.md) | Stand down a whole pod: one `shutdown` entry in the shared comm that every live persona acts on at its next wake, then verify the acks. |
 
+## Tools
+
+Command-line tools for Claude Code live in [`tools/`](tools/). `tools/install.sh` installs them on macOS.
+
+| Tool | Purpose |
+|------|---------|
+| [`claude-sessions`](tools/README.md#claude-sessions) | Snapshot the running Claude Code sessions and reopen them in their iTerm2 windows and tabs after a reboot or crash. |
+
 ## Install a skill
 
 Copy or symlink a skill directory into `~/.claude/skills/`:
