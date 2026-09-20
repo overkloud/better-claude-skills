@@ -154,13 +154,28 @@ lives in `~/.<app>/`:
 - **Heartbeat** — every tick, first:
   `mkdir -p ~/.<app> && date "+%F %T %Z" > ~/.<app>/<role>-heartbeat`.
 - **Cron self-renewal** — `~/.<app>/<role>-cron` records `<id> <YYYY-MM-DD>`;
-  at ≥ 6 days CronDelete, CronCreate (same fire prompt, off-minute pattern),
-  rewrite. **Backstop**: CronList every tick; missing → recreate. If you are
+  at ≥ 6 days CronDelete, CronCreate (off-minute pattern so the pod does not
+  wake onto the shared tree together), rewrite. **Backstop**: CronList every
+  tick; missing → recreate. If you are
   running a wake by hand (a human prompted you) and `CronList` is empty, you
   are **armed but not looping** — the most silent failure there is, because
   everything you do looks normal. Say so in the cycle output and tell the
   user: starting `/loop` is theirs, and no neighbour can see this until your
   heartbeat goes absent or stale.
+- **The fire prompt POINTS at this guide, it never restates it.** A cron's
+  fire prompt is a **frozen copy** taken when the cron was created: editing
+  this guide does not reach it, nothing warns you, and the stale text keeps
+  working right up until it is wrong. Write it as *"read
+  `<role>-loop-prompt.md` from disk now and run its §Cycle as that file reads
+  today; if this prompt conflicts with the file, the file wins"*, inlining
+  only what is cheap to re-check and expensive to get wrong — the never-do
+  rules, the shared-checkout rules, liveness. **After any §Cycle edit, check
+  your own fire prompt** (`CronList`): no session can read another's cron, so
+  this is the one liveness fact a neighbour cannot check for you. In the loop
+  this template came from, one passage went stale three times — `pull
+  --rebase` → `merge --ff-only` → the sync step deleted outright — because
+  the guide was corrected each time while the text that actually woke the
+  session kept the old words.
 - **The other required persona** <!-- operator and engineer only -->: read
   `~/.<app>/<other>-heartbeat`. **Two different failures, and the file tells
   them apart — do not collapse them:**
