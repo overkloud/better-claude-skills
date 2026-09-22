@@ -89,6 +89,17 @@ esac
 case " ${TOOLS[*]} " in *" claude-sessions "*)
   [ -d /Applications/iTerm.app ] || [ -d "$HOME/Applications/iTerm.app" ] ||
     echo "warning: iTerm2 not found; claude-sessions restore reopens sessions in it"
+  if command -v uv >/dev/null; then
+    # First use downloads the iTerm2 library; doing it now keeps the first
+    # hook-driven save under its timeout.
+    uv run -q --script "$SRC_DIR/claude-sessions-iterm" check ||
+      echo "warning: claude-sessions-iterm could not be prepared (see above)"
+  else
+    echo "warning: uv not found; claude-sessions needs it (brew install uv)"
+  fi
+  echo
+  echo "claude-sessions talks to iTerm2 through its Python API. Enable it once:"
+  echo "  iTerm2 > Settings > General > Magic > Enable Python API"
   # Absolute path, so the hooks work whatever PATH Claude Code was started with.
   cmd="$BIN_DIR/claude-sessions save --from-hook"
   cat <<EOF

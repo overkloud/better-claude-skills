@@ -1,0 +1,101 @@
+#!/usr/bin/env -S uv run -q --script
+# /// script
+# requires-python = ">=3.9"
+# dependencies = ["iterm2"]
+# ///
+"""claude-sessions-iterm — the iTerm2 half of claude-sessions.
+
+  layout   print every window's tabs as split trees (JSON), leaves keyed by tty
+  open     read a plan (JSON) on stdin, create its windows, tabs and splits, and
+           run each leaf's command in its pane
+  check    import the iTerm2 library and exit; warms uv's cache after install
+
+Talks to iTerm2 over its Python API, which must be enabled once:
+iTerm2 > Settings > General > Magic > Enable Python API. AppleScript only lists
+a tab's panes in order, with no way to tell which pane sits where; the API hands
+over the real splitter tree, so a nested layout comes back exactly.
+
+layout output:  [{"window": 1, "tab": 1, "tree": <node>}, ...]
+open input:     [{"tabs": [<node>, ...]}, ...]      one entry per window to create
+node:           {"vertical": bool, "children": [<node>, ...]}
+                or a leaf: {"tty": "/dev/ttysNNN", "name": "..."} from layout,
+                {"cmd": "..."} for open. vertical=true means side by side.
+
+Panes are split 50/50; sizes are not restored. CLAUDE_SESSIONS_DELAY seconds
+(default 0.6) pass after each command is sent, so iTerm2 keeps up.
+"""
+
+import asyncio
+import json
+import os
+import sys
+
+import iterm2
+
+DELAY = float(os.environ.get("CLAUDE_SESSIONS_DELAY", "0.6"))
+
+
+async def tree(node):
+    if isinstance(node, iterm2.Splitter):
+        return {"vertical": node.vertical, "children": [await tree(c) for c in node.children]}
+    return {"tty": await node.async_get_variable("tty"), "name": node.name}
+
+
+async def layout(conn):
+    app = await iterm2.async_get_app(conn)
+    out = []
+    for wi, w in enumerate(app.windows, 1):
+        for ti, t in enumerate(w.tabs, 1):
+            out.append({"window": wi, "tab": ti, "tree": await tree(t.root)})
+    json.dump(out, sys.stdout)
+
+
+async def fill(node, session):
+    """Lay `node` out inside the pane `session` currently occupies."""
+    if "cmd" in node:
+        await session.async_send_text(node["cmd"] + "\n")
+        await asyncio.sleep(DELAY)
+        return
+    # Split all siblings first, each from the previous one so the new pane lands
+    # right after it; only then descend, so a child's own splits stay inside its
+    # pane instead of joining the parent's row or column.
+    panes = [session]
+    for _ in node["children"][1:]:
+        panes.append(await panes[-1].async_split_pane(vertical=node["vertical"]))
+    for child, pane in zip(node["children"], panes):
+        await fill(child, pane)
+
+
+async def open_plan(conn):
+    plan = json.load(sys.stdin)
+    app = await iterm2.async_get_app(conn)
+    await app.async_activate()
+    for win in plan:
+        w = None
+        for t in win["tabs"]:
+            # A freshly created window or tab lists its tabs and sessions but
+            # has no "current" pointers yet, so index instead.
+            if w is None:
+                w = await iterm2.Window.async_create(conn)
+                tab = w.tabs[0]
+            else:
+                tab = await w.async_create_tab()
+            await fill(t, tab.sessions[0])
+
+
+def main():
+    cmd = sys.argv[1] if len(sys.argv) == 2 else None
+    if cmd == "layout":
+        iterm2.run_until_complete(layout)
+    elif cmd == "open":
+        # retry: claude-sessions may have just launched iTerm2, whose API socket
+        # takes a moment to appear.
+        iterm2.run_until_complete(open_plan, retry=True)
+    elif cmd == "check":
+        pass
+    else:
+        sys.exit("usage: claude-sessions-iterm {layout | open | check}")
+
+
+if __name__ == "__main__":
+    main()

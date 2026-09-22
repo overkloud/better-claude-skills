@@ -30,7 +30,7 @@ settings, and it's safe to re-run.
 
 Snapshots the Claude Code sessions you have open and reopens them in iTerm2
 after a reboot, crash or accidental quit. Each session goes back into its
-original window and tab.
+original window, tab and split pane.
 
 ```sh
 claude-sessions save               # snapshot running sessions
@@ -39,7 +39,17 @@ claude-sessions restore --dry-run  # print what restore would open
 claude-sessions restore            # reopen everything that isn't already running
 ```
 
-**Requires** iTerm2 and `jq` (bundled with recent macOS; otherwise `brew install jq`).
+**Requires** iTerm2 with its Python API enabled (iTerm2 > Settings > General >
+Magic > Enable Python API), [`uv`](https://docs.astral.sh/uv/) (`brew install uv`)
+and `jq` (bundled with recent macOS; otherwise `brew install jq`). The layout
+half lives in `claude-sessions-iterm`, a small Python script that `uv` runs
+with the `iterm2` library; `install.sh` puts it next to `claude-sessions`.
+
+**Upgrading from an earlier version:** the tool now needs `uv` and iTerm2's
+Python API. Earlier versions drove iTerm2 through AppleScript, which cannot
+tell where a split pane sits, so panes came back in the wrong order. Install
+`uv`, enable the API in iTerm2's settings, and re-run `install.sh`; existing
+hooks and snapshots keep working, and the next save records the full layout.
 
 **Keep the snapshot current automatically** by adding these hooks to
 `~/.claude/settings.json` (`install.sh` prints them with your install path filled in):
@@ -56,9 +66,9 @@ is killed (tab closed, iTerm2 quit, reboot) leaves the snapshot untouched, so
 it still holds what restore should bring back; a deliberate `/exit` drops that
 session from it.
 
-**Limits:** windows and tabs come back exactly. Split panes inside a tab are
-best effort: iTerm2 doesn't expose pane positions, so split orientation is
-inferred from pane sizes.
+**Limits:** windows, tabs and split panes come back in their saved
+arrangement, but every split is 50/50: pane sizes are not restored. A session
+that wasn't in iTerm2 when saved (ssh, tmux) opens in a tab of its own.
 
 **Environment:**
 
@@ -66,7 +76,7 @@ inferred from pane sizes.
 |----------|---------|---------|
 | `CLAUDE_CONFIG_DIR` | `~/.claude` | Claude Code config dir |
 | `CLAUDE_SESSIONS_LOG` | `~/.log/claude-sessions.log` | Log file (rotated at 1 MB) |
-| `CLAUDE_SESSIONS_DELAY` | `0.6` | Seconds between tab launches on restore |
+| `CLAUDE_SESSIONS_DELAY` | `0.6` | Seconds after each command sent on restore, so iTerm2 keeps up |
 
 When a save or restore misbehaves, check the log first. Every run is logged,
 including hook-driven ones.

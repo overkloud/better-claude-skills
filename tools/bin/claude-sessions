@@ -5,7 +5,8 @@
 #   list                 show the snapshot
 #   restore [--dry-run]  reopen every snapshotted session in its iTerm2 window/tab/pane
 #
-# Requires macOS, iTerm2, jq and Claude Code. Keep the snapshot current by
+# Requires macOS, iTerm2 with its Python API enabled (Settings > General >
+# Magic), uv, jq and Claude Code. Keep the snapshot current by
 # running `claude-sessions save --from-hook` from Claude Code's SessionStart and
 # SessionEnd hooks (tools/install.sh prints the settings.json snippet). After a
 # reboot or crash, `claude-sessions restore` brings the sessions back.
@@ -13,7 +14,7 @@
 # Environment:
 #   CLAUDE_CONFIG_DIR       Claude Code config dir (default ~/.claude)
 #   CLAUDE_SESSIONS_LOG     log file (default ~/.log/claude-sessions.log)
-#   CLAUDE_SESSIONS_DELAY   seconds between tab launches on restore (default 0.6)
+#   CLAUDE_SESSIONS_DELAY   seconds after each command sent on restore (default 0.6)
 #
 # Every run, hook-driven ones included, logs to CLAUDE_SESSIONS_LOG. Check it
 # first when a save or restore misbehaves.
@@ -22,16 +23,12 @@
 # session's id, name and cwd. `save` copies the still-running entries out of it;
 # after a reboot that copy is the only record of what was open.
 #
-# Layout: each session's pid owns a tty, and every iTerm2 pane reports its tty, so
-# the two join to give window/tab/pane per session.
-#
-# Windows and tabs are reproduced exactly. Splits within a tab are NOT: iTerm2
-# gives no pane coordinates (`position`/`size` on a session fail with -1728), only
-# rows/columns, so a pane's left/right/above/below relationship is unknowable. Two
-# equally sized panes are ambiguous in principle. Orientation is therefore guessed
-# — equal width means stacked, equal height means side by side — which is right for
-# a simple one-way split and approximate for a nested tree. Sessions still land in
-# the correct window and tab, which is the part that carries the grouping.
+# Layout: each session's pid owns a tty, and iTerm2 reports every pane's tty, so
+# the two join to give the pane each session lives in. claude-sessions-iterm
+# (next to this script) asks iTerm2's Python API for each tab's split tree: the
+# only interface that says which pane sits where, since AppleScript lists a
+# tab's panes but not their arrangement. Windows, tabs and splits come back in
+# their saved arrangement; pane sizes do not, every split is 50/50.
 
 # -E carries the ERR trap below into functions, so no `set -e` exit goes unlogged.
 set -Eeuo pipefail
@@ -39,8 +36,12 @@ set -Eeuo pipefail
 CLAUDE_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 LIVE_DIR="$CLAUDE_DIR/sessions"
 SNAPSHOT="$CLAUDE_DIR/session-snapshot.json"
-DELAY="${CLAUDE_SESSIONS_DELAY:-0.6}"   # seconds between tab launches
 LOG="${CLAUDE_SESSIONS_LOG:-$HOME/.log/claude-sessions.log}"
+# Hooks run with a bare PATH; uv lives in one of these.
+PATH="$PATH:/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin"
+# claude-sessions-iterm sits next to this script, or next to what it links to.
+HELPER=$(cd "$(dirname "$0")" && pwd -P)/claude-sessions-iterm
+[ -e "$HELPER" ] || HELPER=$(cd "$(dirname "$0")" && cd "$(dirname "$(readlink "$0")")" && pwd -P)/claude-sessions-iterm
 
 # Every run appends "start ..." and "end rc=N" plus its decisions, so a hook
 # killed mid-save shows up as a start with no end. Not named `log`: that would
@@ -56,6 +57,11 @@ trap 'rc=$?; [ "$BASH_SUBSHELL" != 0 ] || { logmsg "FAILED rc=$rc line $LINENO: 
 trap 'logmsg "end rc=$?"' EXIT
 
 die() { logmsg "die: $*"; printf 'claude-sessions: %s\n' "$*" >&2; exit 1; }
+iterm() {
+  [ -e "$HELPER" ] || die "claude-sessions-iterm not found next to $0"
+  command -v uv >/dev/null || die "uv is required (brew install uv)"
+  uv run -q --script "$HELPER" "$@"
+}
 # printf to the terminal, and record the same line in the log.
 say() { local m; m=$(printf "$@"); printf '%s\n' "$m"; logmsg "$m"; }
 
@@ -88,45 +94,16 @@ collect_live_files() {
   logmsg "live sessions: ${#LIVE_FILES[@]}"
 }
 
-# {"/dev/ttysNNN": {window,tab,pane,rows,cols}, ...} for every iTerm2 pane, or {}.
-# Never launches iTerm2: `tell application` would auto-start it, which must not
-# happen from a hook in an ssh or tmux session.
-iterm_pane_map() {
-  local raw
+# [{window, tab, tree}] for every iTerm2 tab, leaves keyed by tty, or [].
+# Never launches iTerm2: from a hook in an ssh or tmux session it must not
+# start, and its API socket only exists while it runs.
+iterm_layout() {
   # awk, not `grep -q`: grep exits on first match, SIGPIPEs ps, and under
   # `set -o pipefail` the whole pipeline then reports failure.
   [ "$(ps -eo comm= | awk -F/ '$NF == "iTerm2" {f = 1} END {print f + 0}')" = 1 ] ||
-    { logmsg "iTerm2 not running: saving without layout"; printf '{}'; return 0; }
-  raw=$(osascript 2>>"$LOG" <<'APPLESCRIPT'
-tell application "iTerm2"
-  set out to ""
-  set ws to (get id of every window)
-  repeat with i in ws
-    set w to (first window whose id is i)
-    set ti to 0
-    repeat with t in tabs of w
-      set ti to ti + 1
-      set pi to 0
-      repeat with s in sessions of t
-        set pi to pi + 1
-        -- "|" not tab: inside a tell block the word `tab` binds to the iTerm2 tab
-        -- class, so it stringifies to the literal text "tab".
-        set out to out & (i as string) & "|" & ti & "|" & pi & "|" & ¬
-          (rows of s) & "|" & (columns of s) & "|" & (tty of s) & linefeed
-      end repeat
-    end repeat
-  end repeat
-  return out
-end tell
-APPLESCRIPT
-  ) || { logmsg "iTerm2 pane query failed (error above): saving without layout"; printf '{}'; return 0; }
-  printf '%s' "$raw" | jq -R -s '
-    split("\n") | map(select(length > 0) | split("|"))
-    | map(select(length == 6))
-    | map({key: .[5], value: {window: (.[0] | tonumber), tab: (.[1] | tonumber),
-                              pane: (.[2] | tonumber), rows: (.[3] | tonumber),
-                              cols: (.[4] | tonumber)}})
-    | from_entries' 2>/dev/null || printf '{}'
+    { logmsg "iTerm2 not running: saving without layout"; printf '[]'; return 0; }
+  iterm layout 2>>"$LOG" ||
+    { logmsg "iTerm2 layout query failed (error above): saving without layout"; printf '[]'; }
 }
 
 cmd_save() {
@@ -175,18 +152,26 @@ cmd_save() {
     | map({key: .[0], value: .[1]}) | from_entries')
 
   printf '%s' "$live_json" |
-  jq -s --arg ex "$exclude" --argjson ttys "$ttymap" --argjson panes "$(iterm_pane_map)" '{
-    savedAt: (now | todate),
-    sessions: [ .[]
-      | select(.kind == "interactive")
-      | select(.sessionId != $ex)
-      | {id: .sessionId, name: (.name // ""), cwd: .cwd, startedAt: .startedAt}
-      | . + (($panes[$ttys[.id] // ""] // null) as $l
-             | if $l == null then {} else {layout: $l} end) ]
-      | unique_by(.id)
-  }' > "$tmp"
+  jq -s --arg ex "$exclude" --argjson ttys "$ttymap" --argjson layout "$(iterm_layout)" '
+    ([ .[] | select(.kind == "interactive") | select(.sessionId != $ex)
+         | {id: .sessionId, name: (.name // ""), cwd: .cwd, startedAt: .startedAt} ]
+     | unique_by(.id)) as $sessions
+    | ($ttys | with_entries({key: .value, value: .key})) as $sid
+    | ([$sessions[].id] | map({key: ., value: true}) | from_entries) as $known
+    # Keep only the panes holding a snapshotted session: a splitter left with
+    # one child collapses into it, and one left empty disappears.
+    | def prune:
+        if .children then
+          (.children | map(prune) | map(select(. != null))) as $c
+          | if ($c | length) == 0 then null
+            elif ($c | length) == 1 then $c[0]
+            else {vertical, children: $c} end
+        else ($sid[.tty] // "") as $i | if $known[$i] then {id: $i} else null end end;
+    { savedAt: (now | todate),
+      sessions: $sessions,
+      layout: [ $layout[] | .tree |= prune | select(.tree != null) ] }' > "$tmp"
   mv "$tmp" "$SNAPSHOT"
-  logmsg "saved: $(jq -r '"\(.sessions | length) session(s), \([.sessions[] | select(.layout)] | length) with layout"' "$SNAPSHOT")"
+  logmsg "saved: $(jq -r '"\(.sessions | length) session(s), \([.layout[].tree | .. | objects | select(.id?)] | length) placed"' "$SNAPSHOT")"
 }
 
 cmd_list() {
@@ -195,12 +180,6 @@ cmd_list() {
          (.sessions[] | "  \(.name // "(unnamed)")\t\(.cwd)\t\(.id)")' "$SNAPSHOT" |
     column -t -s $'\t'
 }
-
-# Escape a string for embedding in an AppleScript double-quoted literal.
-as_esc() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'; }
-
-# osascript errors go to the terminal and the log; the ERR trap records the call.
-osa() { osascript "$@" 2> >(tee -a "$LOG" >&2); }
 
 cmd_restore() {
   local dry=0
@@ -215,8 +194,11 @@ cmd_restore() {
     running+="$(jq -r .sessionId "$f" 2>/dev/null || true) "   # it may exit meanwhile
   done
 
-  local group action id name cwd cmdline wid=0 curgroup="" opened=0 skipped=0
-  while IFS=$'\t' read -r group action id name cwd; do
+  # Decide per session, and keep id -> command line for the ones to open.
+  # name is read last: it may be empty, and `read` would swallow an empty
+  # field in the middle.
+  local id cwd name cmdline cmds="" skipped=0
+  while IFS=$'\t' read -r id cwd name; do
     [ -n "$id" ] || continue
     if [ "${running#* $id }" != "$running" ]; then
       say 'skip  %s — already running' "${name:-$id}"; skipped=$((skipped + 1)); continue
@@ -224,90 +206,51 @@ cmd_restore() {
     if [ ! -d "$cwd" ]; then
       say 'skip  %s — directory gone: %s' "${name:-$id}" "$cwd"; skipped=$((skipped + 1)); continue
     fi
-    # Without this, an unresumable id just makes claude exit and the tab vanish.
+    # Without this, an unresumable id just makes claude exit and the pane vanish.
     if ! compgen -G "$CLAUDE_DIR/projects/*/$id.jsonl" >/dev/null; then
       say 'skip  %s — no transcript on disk' "${name:-$id}"; skipped=$((skipped + 1)); continue
     fi
-
     cmdline="cd $(printf '%q' "$cwd") && claude --resume $(printf '%q' "$id")"
     [ -n "$name" ] && cmdline+=" --name $(printf '%q' "$name")"
+    cmds+="$id"$'\t'"$cmdline"$'\n'
+  done < <(jq -r '.sessions[] | [.id, .cwd, .name] | @tsv' "$SNAPSHOT")
 
-    # A new window group always starts a window; so does the first surviving
-    # session overall, in case the row that was meant to open the window got
-    # skipped above.
-    if [ "$group" != "$curgroup" ] || [ "$wid" = 0 ]; then
-      action=WINDOW
-    elif [ "$action" = WINDOW ]; then
-      action=TAB
-    fi
+  # The plan is the saved layout with each pane's session replaced by its
+  # command line. Panes of skipped sessions are pruned, and sessions that had
+  # no pane (not in iTerm2 when saved) get a tab each in one extra window.
+  local plan opened
+  plan=$(printf '%s' "$cmds" | jq -R -s --slurpfile snap "$SNAPSHOT" '
+    (split("\n") | map(select(length > 0) | split("\t") | {key: .[0], value: .[1]}) | from_entries) as $cmd
+    | ($snap[0].sessions | map({key: .id, value: (if .name == "" then .id else .name end)}) | from_entries) as $label
+    | def leaf: {id: ., name: $label[.], cmd: $cmd[.]};
+      def prune:
+        if .children then
+          (.children | map(prune) | map(select(. != null))) as $c
+          | if ($c | length) == 0 then null
+            elif ($c | length) == 1 then $c[0]
+            else {vertical, children: $c} end
+        else if $cmd[.id] then (.id | leaf) else null end end;
+      ($snap[0].layout // [] | map(.tree |= prune | select(.tree != null))) as $placed
+    | ([$placed[].tree | .. | objects | select(.id?) | .id]) as $ids
+    | ($placed | group_by(.window) | map({tabs: map(.tree)}))
+      + ([$cmd | keys[] | select(. as $i | $ids | index($i) | not) | leaf]
+         | if length > 0 then [{tabs: .}] else [] end)')
+  opened=$(printf '%s' "$plan" | jq '[.. | objects | select(.cmd?)] | length')
 
-    if [ "$dry" = 1 ]; then
-      say 'would %-6s %s' "$action" "$cmdline"
-      curgroup="$group"; wid=1; opened=$((opened + 1)); continue
-    fi
+  # One line per tab: "a | b" is side by side, "a / b" stacked, nested in ().
+  printf '%s' "$plan" | jq -r '
+    def r: if .children then (if .vertical then " | " else " / " end) as $j
+             | "(" + (.children | map(r) | join($j)) + ")" else .name end;
+    to_entries[] | "window \(.key + 1)",
+      (.value.tabs | to_entries[] | "  tab \(.key + 1)  \(.value | if .children then r | .[1:-1] else r end)")' |
+    while IFS= read -r line; do say '%s' "$line"; done
 
-    case "$action" in
-      WINDOW)
-        # Keep the window id so later tabs and splits land here even if the
-        # user clicks away mid-restore.
-        wid=$(osa -e 'tell application "iTerm2"' \
-                  -e 'activate' \
-                  -e 'set w to (create window with default profile)' \
-                  -e "tell current session of w to write text \"$(as_esc "$cmdline")\"" \
-                  -e 'return id of w' \
-                  -e 'end tell')
-        ;;
-      TAB)
-        osa -e 'tell application "iTerm2"' \
-            -e "tell (first window whose id is $wid)" \
-            -e 'set t to (create tab with default profile)' \
-            -e "tell current session of t to write text \"$(as_esc "$cmdline")\"" \
-            -e 'end tell' -e 'end tell'
-        ;;
-      SPLITH|SPLITV)
-        local dir=horizontally
-        [ "$action" = SPLITV ] && dir=vertically
-        osa -e 'tell application "iTerm2"' \
-            -e "tell (first window whose id is $wid)" \
-            -e 'tell current session of current tab' \
-            -e "set s to (split $dir with default profile)" \
-            -e 'end tell' \
-            -e "tell s to write text \"$(as_esc "$cmdline")\"" \
-            -e 'end tell' -e 'end tell'
-        ;;
-    esac
-    curgroup="$group"
-    say '%-6s %s  (%s)  window=%s' "$action" "${name:-$id}" "$cwd" "$wid"
-    opened=$((opened + 1))
-    sleep "$DELAY"
-  done < <(jq -r '
-    [ .sessions | to_entries[] | .key as $k | .value as $s
-      | {id: $s.id, name: $s.name, cwd: $s.cwd,
-         w: ($s.layout.window // 0),
-         t: ($s.layout.tab // (1000 + $k)),   # unplaced sessions each get their own tab
-         p: ($s.layout.pane // 1),
-         rows: ($s.layout.rows // 0), cols: ($s.layout.cols // 0)} ]
-    | sort_by(.w, .t, .p)
-    | group_by(.w)
-    | map(group_by(.t)
-          | to_entries
-          | map(.key as $ti | .value as $panes
-                | ($panes | map(.cols) | max) as $maxc
-                | ($panes | map(.cols) | unique | length) as $ucols
-                | ($panes | map(.rows) | unique | length) as $urows
-                | ($panes | to_entries | map(.key as $pi | .value as $s
-                    | $s + {action:
-                        (if   $ti == 0 and $pi == 0 then "WINDOW"
-                         elif $pi == 0              then "TAB"
-                         elif $ucols == 1           then "SPLITH"   # equal width  -> stacked
-                         elif $urows == 1           then "SPLITV"   # equal height -> side by side
-                         elif $s.cols < $maxc       then "SPLITV"
-                         else "SPLITH" end)})))
-          | flatten)
-    | flatten
-    | .[] | [(.w | tostring), .action, .id, .name, .cwd] | @tsv' "$SNAPSHOT")
-
-  printf '\n'; say '%d opened, %d skipped' "$opened" "$skipped"
+  if [ "$dry" = 1 ]; then say '%d would open, %d skipped' "$opened" "$skipped"; return 0; fi
+  if [ "$opened" -gt 0 ]; then
+    pgrep -qx iTerm2 || open -a iTerm   # the helper waits for its API socket
+    printf '%s' "$plan" | iterm open
+  fi
+  say '%d opened, %d skipped' "$opened" "$skipped"
 }
 
 USAGE="usage: claude-sessions {save [--from-hook] | list | restore [--dry-run]}"
