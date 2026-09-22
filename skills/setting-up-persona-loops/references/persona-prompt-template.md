@@ -251,7 +251,10 @@ checked-in hook (`bin/shared-checkout-guard`, wired in `.claude/settings.json`,
 - **Commit named paths only**: `git add -- <paths>`, `git commit -m … --
   <paths>`. Never `add -A`, `add .`, `add -u`, `commit -a`/`-am`. A dirty file
   you did not write is a neighbour's in-flight work; an untracked task file is
-  a filing, not litter.
+  a filing, not litter. A **new** file needs the `git add -- <path>`
+  first: `git commit -- <path>` only commits paths git already tracks and
+  otherwise dies with "pathspec did not match any file(s) known to git" — the
+  one case where skipping `add` silently files nothing at all.
 - **Never stash, `reset --hard`, `clean`, or `checkout`/`restore .`** — each
   destroys or pockets work that is not yours.
 - **Re-read a file immediately before editing it** — the tree moves under you
