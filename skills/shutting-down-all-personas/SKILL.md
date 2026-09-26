@@ -92,8 +92,8 @@ Commands, templates and the report skeleton are in
 | What you see | What it means | What you do |
 |---|---|---|
 | `ack: <role> stood down` in the comm | stood down cleanly | tell the user that window is safe to close |
-| No ack, heartbeat fresh | still looping; its wake has not come yet | wait one more interval before concluding anything |
-| No ack, heartbeat stale, no commits since | crashed, or died mid-stand-down | do not seize its claims — file the ops-issue; the user closes the window |
+| No ack, heartbeat fresh (younger than 3× the interval it publishes) | still looping; its wake has not come yet | wait up to 2× its published interval before concluding anything |
+| No ack, heartbeat stale (older than 3× its published interval), no commits since | crashed, or died mid-stand-down | do not seize its claims — file the ops-issue; the user closes the window |
 | Heartbeat absent | never looped: it never read the comm, so the order never reached it | check the bus for anything it claimed while running by hand, file it, user closes the window |
 | Ack posted, heartbeat now stale | normal and expected | nothing — a stood-down persona leaves a stale heartbeat on purpose |
 

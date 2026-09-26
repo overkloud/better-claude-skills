@@ -99,19 +99,22 @@ and are never deleted.
 1. Sync fast-forward-only — `git fetch -q origin && git merge --ff-only
    origin/main` (exit `0` synced; `1` a neighbour holds the file that moved:
    work from the current sha and say so; `128` real divergence: stop and tell
-   the user — see "Shared checkout"). Then liveness: write your heartbeat
-   (timestamp **and** the interval you are running), renew the session cron at
+   the user — see "Shared checkout"). **If this is a fresh session**, first
+   clear what a dead predecessor left behind —
+   `rm -f ~/.<app>/<role>-cadence ~/.<app>/<role>-guide-sha` — and re-arm
+   session-only tasks. Then liveness: write your heartbeat (timestamp **and**
+   the interval from `~/.<app>/<role>-cadence`), renew the session cron at
    day 6, read the other required persona's heartbeat (see "Liveness and
-   re-arm"). Then the **guide sha-gate** — `git log -1 --format=%H -- <this
-   file>` against `~/.<app>/<role>-guide-sha`; unchanged skips the re-read
-   (see "Spend context where it pays"). Then the **shared comm** read (see
-   "Shared comm"): a `guide-update` naming this file is a re-arm before
-   anything else this wake. Re-arm session-only tasks if this is a fresh
-   session, and clear the state a dead predecessor left behind:
-   `rm -f ~/.<app>/<role>-cadence ~/.<app>/<role>-guide-sha`. On a fresh
-   session also **reconcile recorded state against reality** before acting —
-   dispatch the catch-up read to a subagent and act on the state block it
-   returns ("Delegate"): the sha actually deployed vs. CURRENT STATE,
+   re-arm"). Then the **shared comm** read (see "Shared comm"): a
+   `guide-update` naming this file is a re-arm before anything else this
+   wake — read the file whole and skip the gate. Otherwise the **guide
+   sha-gate** — `git log -1 --format=%H -- <this file>` against
+   `~/.<app>/<role>-guide-sha`; unchanged skips the re-read, changed reads
+   the diff, missing reads in full (see "Spend context where it pays") — and
+   write the new sha as the last act of this step. On a fresh session also
+   **reconcile recorded state against reality** before acting — dispatch the
+   catch-up read to a subagent and act on the state block it returns
+   ("Delegate"): the sha actually deployed vs. CURRENT STATE,
    health now, open incidents, and any `in-progress` item addressed to your
    role (it is yours to resume — a predecessor died mid-work; a deploy
    recorded as started but never finished is verified before anything else).
@@ -185,23 +188,23 @@ faster than writing. Default to the narrow read:
   `git diff <cached>..HEAD -- <this file>`: a dated rule append is a few
   hundred tokens against the file's <~72k>. Read the file whole, or send a
   subagent to read it and return what changed in §Cycle, only for a
-  structural rewrite. Write the sha that
-  `git log -1 --format=%H -- <this file>` returns, never HEAD — HEAD moves on
-  every pod commit, so caching it re-reads the file every wake — and write it
-  only after the comm read, so a `guide-update` arriving this wake still
-  finds a diff. **The gate tracks the file, not your context:** on the first
-  wake of a session and the first wake after a compaction, read the guide in
-  full whatever the sha says. A `guide-update` re-arm also reads it whole;
-  the gate does not apply to it.
+  structural rewrite. Cache the sha that
+  `git log -1 --format=%H -- <this file>` returns (HEAD moves on every pod
+  commit, so caching HEAD re-reads the file every wake), written as the last
+  act of Cycle step 1. A missing sha file reads in full. **The file's sha
+  says whether the file changed; only your context says whether you have
+  read it** — on a session's first wake and the first wake after a
+  compaction, read the guide in full whatever the sha says. A `guide-update`
+  re-arm reads it whole and skips the gate.
 - Comm: the watermark (`~/.<app>/<role>-comm-read`) bounds each wake's read
   to the entries you have not processed. `comm/README.md` and the day-files
   are an arm-time read; an unread span longer than one day-file goes to a
   subagent ("Delegate").
-- Bus: grep the address, never the filename —
+- Bus: grep the address —
   `grep -rlE '^to: <role>$' <bus>/next/` lists your items in one pass,
   and the frontmatter wins when a filename disagrees with it (PROTOCOL.md
-  → "Filename"). Read `status` and `priority` out of the matches before
-  any body.
+  → "Filename"). Exit `1` is an empty result; only exit `2` is an error.
+  Read `status` and `priority` out of the matches before any body.
 - Journal or ledger: the `## CURRENT STATE` / standing-facts head answers
   most wakes; history is for the wake that needs history.
 - Wider than that, a subagent reads it and returns the answer ("Delegate").
@@ -285,16 +288,18 @@ optional — their queues wait while they are down. The cadence is a session
 cron, and session crons auto-expire 7 days after creation, silently. State
 lives in `~/.<app>/`:
 
-- **Heartbeat** — every tick, first:
-  `mkdir -p ~/.<app> && echo "$(date "+%F %T %Z") <interval>m" >
-  ~/.<app>/<role>-heartbeat`. Read the interval out of
-  `~/.<app>/<role>-cadence` first so you publish the one you are actually
-  running — that number is what lets a neighbour tell a backed-off session
-  from a dead one.
+- **Heartbeat** — every tick, first (one line when you run it):
+  `mkdir -p ~/.<app> && echo "$(date "+%F %T %Z") <interval>m" > ~/.<app>/<role>-heartbeat`
+  Read the interval out of `~/.<app>/<role>-cadence` first so you publish the
+  one you are actually running — that number is what lets a neighbour tell a
+  backed-off session from a dead one.
 - **Cron self-renewal** — `~/.<app>/<role>-cron` records `<id> <YYYY-MM-DD>`;
   at ≥ 6 days CronDelete, CronCreate (off-minute pattern so the pod does not
   wake onto the shared tree together), rewrite. **Backstop**: CronList every
-  tick; missing → recreate. If you are
+  tick; missing → recreate. Both renewal and backstop create the cron **at
+  the interval in `~/.<app>/<role>-cadence`**, with the same fire prompt and
+  offset; a renewal at the base interval while the cadence file says <120>
+  leaves you waking at <15> and publishing <120>. If you are
   running a wake by hand (a human prompted you) and `CronList` is empty, you
   are **armed but not looping** — the most silent failure there is, because
   everything you do looks normal. Say so in the cycle output and tell the
@@ -303,19 +308,20 @@ lives in `~/.<app>/`:
 - **Quiet-wake backoff** — an idle pod should not wake every <15> minutes for
   a week. `~/.<app>/<role>-cadence` holds one number, `<interval-minutes>`;
   a missing file means `<15>`. Classify every wake and rewrite it:
-  - **Quiet** requires *all* of — no **actionable** open bus item addressed
-    to you (a parked item whose `Status:` names an uncleared gate does not
-    count), no unprocessed comm entry for `<role>` or `pod`, nothing you hold
-    `in-progress`, nothing **of yours** to commit (a neighbour's dirty file
-    in a shared checkout is the normal state, not your work), <operators:>
-    and no health-state transition this wake. Anything you could not check —
-    a grep that errored, a sync that exited non-zero, an env you could not
-    reach — counts as **not quiet**.
+  - **Quiet** requires *all* of — **you did no work this wake** (no claim,
+    no backlog task, no comm entry acted on); no **actionable** open bus item
+    addressed to you (a `status: todo` item whose latest `## Parked` note
+    ends in an unanswered question is waiting on someone else); no unprocessed
+    comm entry for `<role>` or `pod`; nothing you hold `in-progress`; nothing
+    **of yours** to commit (a shared checkout is normally dirty with a
+    neighbour's work); <operators:> and no health-state transition this wake.
+    Anything you could not check — a grep that exited `2`, a sync that exited
+    non-zero, an env you could not reach — counts as **not quiet**. A grep
+    that exited `1` found nothing, which is the quiet case.
   - Quiet → `interval = min(interval × 2, <120>)`: <15 → 30 → 60 → 120>
-    minutes. The cap is an absolute ceiling, not a number of doublings — a
-    role whose base is already <60> stops at <120> like everyone else. Not
-    quiet → write `<15>` **the moment you know**, ahead of the work, no ramp
-    down.
+    minutes. The cap is an absolute ceiling — a role whose base is already
+    <60> stops at <120> like everyone else. Not quiet → write `<15>` **the
+    moment you know**, ahead of the work, no ramp down.
   - When the interval changes, CronDelete and CronCreate at the new one and
     rewrite `~/.<app>/<role>-cron` with the new id and **today's** date — that
     rewrite is itself a renewal, so the day-6 rule measures from it, the date
@@ -362,7 +368,8 @@ lives in `~/.<app>/`:
     sessions commit between heartbeats). Read the interval off the file and
     measure against it: a fixed window files every backed-off neighbour as
     `down` and sends the user to re-arm a healthy session. A heartbeat
-    carrying no interval is a writer on <15> — use 3 × <15>.
+    carrying no interval is a writer on **its own role's base** (table in the
+    operation README) — use 3 × that.
 
   **This is the only check in the system that can catch a never-looped
   persona, so it has to hold.** A session's own `CronList` backstop cannot:

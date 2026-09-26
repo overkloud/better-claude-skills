@@ -26,8 +26,8 @@ re-arms it. Setting a loop up is `setting-up-persona-loops`.
 - The user wants to close this session — machine going down, done for the day, or
   the session is being moved to another checkout or model tier.
 - Context is nearly exhausted and the clean move is a handover to a successor session
-  rather than dying mid-item. Start it with window to spare: the stand-down itself
-  spends tokens on reading, parking, and the verification step.
+  rather than dying mid-item. A compaction notice is the signal to start: the
+  stand-down itself spends tokens on reading, parking, and the verification step.
 - A session is wedged and will be replaced.
 
 Not for: retiring a persona permanently (a `to-user` proposal, then a removal — see

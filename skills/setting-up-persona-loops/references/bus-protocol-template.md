@@ -83,8 +83,8 @@ so in the body and sorts first within P1; any other token is malformed (rule 6).
    and its result — never just "done" and never narration
    (`*-loop-prompt.md` → "Write tight"). **One item never spans two roles.**
    When one role's part is finished, its item is `done` and the next step is
-   a **new** item addressed to the next role. Holding an item open waiting on another role hides it
-   from the staleness rule.
+   a **new** item addressed to the next role. Holding an item open waiting
+   on another role hides it from the staleness rule.
 3. **Approval-requests** name the exact sha, the exact config diff (every
    changed `KEY=VALUE` line), the cost cap, and the transition. Anything
    ambiguous fails closed: the executor rejects and asks instead of guessing.

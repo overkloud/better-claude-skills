@@ -10,7 +10,7 @@ Replace `<app>`, `<roles>`, `<bus>`, `<todo dir>` from the pod's README
 
 ```sh
 ls -l  ~/.<app>/*-heartbeat            # who is armed at all; absent = never looped
-date; cat ~/.<app>/*-heartbeat         # ages, and the interval each publishes
+date; grep -H . ~/.<app>/*-heartbeat   # per role: age, and the interval it publishes
 git fetch -q origin && git merge --ff-only origin/main
 sed -n '1,200p' docs/operation/<app>/comm/$(date +%F).md   # today's traffic
 grep -rHE '^(to|status):' <bus>/next/                      # open claims, by role
@@ -38,7 +38,8 @@ by your guide's "Shutdown" section (skill: shutting-down-current-persona) — pa
 close your claims, write CURRENT STATE, journal, commit named paths, push, post
 `ack: <role> stood down at HH:MM`, leave your heartbeat in place, then stop.
 <operator> goes last: collect the acks, file what nobody could close, prune, post
-`note: pod down`. Expect the last ack by <HH:MM = now + slowest cadence>.
+`note: pod down`. Expect the last ack by <HH:MM = now + 2× the longest interval any
+heartbeat publishes>.
 ```
 
 Point at the procedure and stop there — everyone live reads this entry, and their
@@ -57,8 +58,9 @@ git push
 | engineer / research | ~1800 s | now + the interval its heartbeat publishes |
 | product manager | ~3600 s | now + the interval its heartbeat publishes |
 
-A backed-off persona publishes a longer interval than its base — read the number off
-`~/.<app>/<role>-heartbeat` rather than the middle column, which is only the floor.
+A backed-off persona publishes a longer interval than its base, and the ramp lags the
+heartbeat by one wake — read the number off `~/.<app>/<role>-heartbeat` and allow up to
+2× it. The middle column is the floor.
 
 Poll rather than block. Between checks there is nothing to do — a persona mid-wake
 finishes its stand-down without help. The fast path for an impatient user is per role:
@@ -69,7 +71,7 @@ open that window and run `shutting-down-current-persona` there.
 ```sh
 git fetch -q origin && git merge --ff-only origin/main
 grep -n 'stood down' docs/operation/<app>/comm/$(date +%F).md   # the acks
-ls -l ~/.<app>/*-heartbeat; date                                 # fresh / stale / absent
+date; grep -H . ~/.<app>/*-heartbeat   # stale = older than 3× the interval it publishes
 grep -rl '^status: in-progress' <bus>/next/                     # expect: no matches
 grep -HiE '^(\*\*)?Status: *in-progress' <todo dir>/<app>_*.md   # expect: no matches
 git status --porcelain                                           # expect: nothing left dirty

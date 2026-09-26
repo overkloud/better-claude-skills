@@ -71,7 +71,7 @@ Not for: a one-off task, or a single short-lived session (just write a plan).
    channel.** The live sessions of one app form a *pod*. Two personas are
    **required** — the operator and the engineer — and each watches the other's
    heartbeat; every other role is optional and its queue waits while it is down.
-   A quiet wake lengthens the interval: base → 2× → 4× → 8×, to an absolute cap. Each
+   A quiet wake doubles the interval, up to an absolute cap. Each
    heartbeat therefore publishes the interval it was written at, and staleness
    is measured against *that* interval — a fixed window files every backed-off
    neighbour as `down`.
@@ -140,9 +140,8 @@ Not for: a one-off task, or a single short-lived session (just write a plan).
    `~/.<app>/<role>-heartbeat` **exists** on disk, carrying a timestamp and an
    interval. Then confirm the pair sees each other — each required persona's
    first wake should read its neighbour's heartbeat and find it. A `~/.<app>/`
-   holding heartbeats for some roles and
-   not others is the signature of this failure, and it is worth an explicit
-   `ls ~/.<app>/` at the end of setup.
+   holding heartbeats for some roles and not others is the signature of this
+   failure, and it is worth an explicit `ls ~/.<app>/` at the end of setup.
 10. **Know how to stand down.** Closing a window is not a shutdown: an item left
     `in-progress` and a heartbeat that just stops are indistinguishable from a crash.
     One session stands down through the `shutting-down-current-persona` skill; the

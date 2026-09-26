@@ -22,13 +22,13 @@ is optional; a down optional role means its queue waits, not that another role
 absorbs its remit. Arm the pair first.
 
 **Cadence backs off when nothing happens.** The intervals above are the base: a
-persona whose wake finds nothing open, nothing unread, nothing claimed and
-nothing to commit doubles its own interval until it reaches the cap (900 s →
-1800 → 3600 → 7200; the cap is an absolute ceiling, so a role whose base is
-already 3600 s stops at 7200 s too) and drops back to base on the first wake
-that is not quiet. Its heartbeat
-publishes the interval it is running so a neighbour measures staleness against
-that, and the cap is chosen knowing its latency — at two hours, an item filed
+persona whose wake did no work and finds nothing actionable open, nothing
+unread, nothing claimed and nothing of its own to commit doubles its interval
+until it reaches the cap (900 s → 1800 → 3600 → 7200; the cap is an absolute
+ceiling, so a role whose base is already 3600 s stops at 7200 s too) and drops
+back to base on the first wake that is not quiet. Its heartbeat publishes the
+interval it is running so a neighbour measures staleness against that, and the
+cap is chosen knowing its latency — at two hours, an item filed
 to a quiet persona waits that long (`persona-prompt-template.md` → "Liveness
 and re-arm").
 
