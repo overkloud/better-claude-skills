@@ -95,7 +95,8 @@ Not for: a one-off task, or a single short-lived session (just write a plan).
 4. **Write one resume prompt per role** at `docs/operation/<app>/<role>-loop-prompt.md`
    from `references/persona-prompt-template.md`, plus `docs/operation/<app>/README.md`
    (persona table). Personas of different apps are **mutually out of scope** — say so in
-   every prompt.
+   every prompt. Keep the template's "Write tight" section — every comm entry, bus
+   outcome, journal line, and cycle report the persona produces stays concise.
 5. **Make the dangerous boundaries structural**, not prose: a permission hook that
    denies prod-file edits, a checked-in monitor script (never rebuilt from prose each
    session), read-only DB wrappers for non-operators, and — whenever two sessions

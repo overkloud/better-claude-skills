@@ -61,8 +61,10 @@ created: YYYY-MM-DD
 ---
 ```
 
-Body: what/why, acceptance criteria, links to reports/plans/data. Items must
-be self-contained — the receiving session acts without the author being alive.
+Body: what/why, acceptance criteria, links to reports/plans/data — plainly
+stated, no more than the receiving role needs (`*-loop-prompt.md` → "Write
+tight"). Items must be self-contained — the receiving session acts without
+the author being alive.
 
 **Priority is P1/P2/P3 — there is no P0.** "Drop everything" is a P1 that says
 so in the body and sorts first within P1; any other token is malformed (rule 6).
@@ -76,9 +78,10 @@ so in the body and sorts first within P1; any other token is malformed (rule 6).
    the one that moves it to `done/` with the execution `## Outcome`.
 2. **Lifecycle.** `todo` → `in-progress` (claim, commit) → `git mv` to `done/`
    with `## Outcome` appended and `status: done` (or `rejected`, with the
-   reason). Outcomes state results — numbers, verdicts, shas, links — never
-   just "done". **One item never spans two roles.** When one role's part is
-   finished, its item is `done` and the next step is a **new** item addressed
+   reason). Outcomes are numbers, shas, verdicts, the verification command
+   and its result — never just "done" and never narration
+   (`*-loop-prompt.md` → "Write tight"). **One item never spans two roles.**
+   When one role's part is finished, its item is `done` and the next step is a **new** item addressed
    to the next role. Holding an item open waiting on another role hides it
    from the staleness rule.
 3. **Approval-requests** name the exact sha, the exact config diff (every
@@ -170,5 +173,6 @@ Closing appends:
 ## Outcome
 
 <Merged sha / deployed sha / measured numbers / verdict; the verification
-command and its result; what was handed to whom as which new item.>
+command and its result; what was handed to whom as which new item — no
+narration.>
 ```

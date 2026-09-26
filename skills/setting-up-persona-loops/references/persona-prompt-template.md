@@ -124,6 +124,37 @@ and are never deleted.
 8. Commit bus/journal changes immediately (`journal:` prefix); push if a
    remote is configured.
 
+## Write tight — every entry you produce             <!-- every role -->
+
+State what you did and why. Stop there. This governs every comm entry, bus
+item and `## Outcome`, journal line, and cycle report to the user.
+
+Do not:
+- Add elaboration nobody asked for — rationale for the rationale, reassurance,
+  restating the standing rule that motivated the action.
+- Use "it is X, not Y" / "not X but Y" contrast framing. Say the true thing;
+  don't also name the false one.
+- Pad an entry to sound considered. Length is not care.
+- Re-explain something already written in a guide, the protocol, or an
+  earlier entry — link or name it instead.
+
+Do: name the concrete thing (path, sha, number, item id) and state the
+decision plainly.
+
+Too long (a comm entry):
+
+> One flag for pdm, which I've put in the comm: filing a P3 now produces a
+> record, not a work item. Several of the eight held items came from its own
+> UX walk and review sweeps. I've told it to keep filing — losing a finding
+> costs far more than filing one — but that if something genuinely needs
+> doing, P3 is no longer the priority that gets it done, and the honest move
+> is to argue for P2 rather than file a P3 and expect it worked.
+
+Tight:
+
+> P3 filings are records only now — 8 held, several from pdm's own UX walks.
+> Keep filing; if something needs doing, argue for P2.
+
 ## Delegate — this session orchestrates              <!-- every role -->
 
 This session lives for days and its context window is its lifespan. It reads

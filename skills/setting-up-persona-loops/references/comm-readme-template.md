@@ -30,7 +30,9 @@ at once, named paths only, prefix `comm:`.
 
 ```markdown
 ## HH:MM <from> → <to> · <kind>: <subject>
-One to five lines. Name paths and shas. Never a secret, an account number or a dollar figure.
+One to three lines: what happened, why. No "it is X, not Y" framing, no
+elaboration beyond that (`*-loop-prompt.md` → "Write tight"). Name paths and
+shas. Never a secret, an account number or a dollar figure.
 ```
 
 **A sha you name must be on `main`** — check it
