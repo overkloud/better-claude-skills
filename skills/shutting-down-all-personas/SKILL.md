@@ -60,15 +60,19 @@ Commands, templates and the report skeleton are in
    stop.
 3. **Post one `shutdown` entry addressed to `pod`.** Name the roles, the time, and the
    procedure each is to follow, so nobody improvises a shutdown of their own design.
+   Six lines is the whole order — every live persona spends its window reading it, and
+   the steps live in their own guides (`*-loop-prompt.md` → "Shutdown").
    Commit it `comm:`-prefixed with named paths and push immediately — an unpushed
    order reaches nobody.
 4. **Touch nothing else.** No deleting another session's cron, no editing its claimed
    items, no removing its worktree, no `/loop` stop from outside. The entry is the
    whole mechanism.
-5. **Wait by cadence, not by clock.** Each persona acts at its *next wake*: an operator
-   at ~900 s, an engineer at ~1800 s, a product manager at ~3600 s. Expect the last ack
-   about one full interval after the post, and say so up front — a pod that looks
-   unresponsive for forty minutes is usually just a product manager between wakes.
+5. **Wait by cadence, not by clock.** Each persona acts at its *next wake*, and the
+   interval to use is the one **its own heartbeat publishes** — a quiet pod is exactly
+   the state where personas have backed off, so a base-rate estimate runs short. Expect
+   the last ack about one published interval after the post, up to the cap, and say so
+   up front — a pod that looks unresponsive for two hours is usually just a backed-off
+   persona between wakes.
    If the user will not wait, the fast path per role is to open that window and run
    `shutting-down-current-persona` in it.
 6. **Go last if you are the operator.** The operator is the comm's custodian: it

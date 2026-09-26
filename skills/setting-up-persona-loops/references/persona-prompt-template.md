@@ -22,7 +22,8 @@ You are the <role> session. <What you do, two sentences.> You NEVER <the
 role's hard exclusions: deploy / edit code / spend money / write to env DBs>.
 Cron jobs and Monitor tasks are **session-only** — on a fresh session nothing
 is armed until you re-arm them (RE-ARM below); everything else is durable
-state on disk/DB/git. Self-pace with `/loop` (<interval>s).
+state on disk/DB/git. Self-pace with `/loop` (<base interval>s), which
+backs off on quiet wakes ("Liveness and re-arm").
 
 ## Scope: the <APP> app only
 
@@ -65,6 +66,12 @@ against the thing you care about, or put the proxy in conjunction with direct
 evidence. Alert only on state TRANSITIONS; every recovery threshold needs a
 dead band above its alert threshold.
 
+**Output contract for the script**: one status line per check plus one
+overall verdict, with raw command output kept inside the script. A check that
+needs detail writes it to the file the runbook names and prints that path. A
+monitor that pipes its own tool output into the session spends the wake's
+budget on text nobody reads.
+
 Checks, in priority order — each with its state name and its runbook fix:
 
 1. <process not running> → <STATE>. <grace period and why> Fix: <command>.
@@ -92,16 +99,22 @@ and are never deleted.
 1. Sync fast-forward-only — `git fetch -q origin && git merge --ff-only
    origin/main` (exit `0` synced; `1` a neighbour holds the file that moved:
    work from the current sha and say so; `128` real divergence: stop and tell
-   the user — see "Shared checkout"). Then liveness: touch your heartbeat,
-   renew the session cron at day 6, read the other required persona's
-   heartbeat (see "Liveness and re-arm"). Then the **shared comm** read (see
+   the user — see "Shared checkout"). Then liveness: write your heartbeat
+   (timestamp **and** the interval you are running), renew the session cron at
+   day 6, read the other required persona's heartbeat (see "Liveness and
+   re-arm"). Then the **guide sha-gate** — `git log -1 --format=%H -- <this
+   file>` against `~/.<app>/<role>-guide-sha`; unchanged skips the re-read
+   (see "Spend context where it pays"). Then the **shared comm** read (see
    "Shared comm"): a `guide-update` naming this file is a re-arm before
    anything else this wake. Re-arm session-only tasks if this is a fresh
-   session. On a fresh session also **reconcile recorded state against reality** before
-   acting: the sha actually deployed vs. CURRENT STATE, health now, open
-   incidents, and any `in-progress` item addressed to your role (it is yours
-   to resume — a predecessor died mid-work; a deploy recorded as started but
-   never finished is verified before anything else).
+   session, and clear the state a dead predecessor left behind:
+   `rm -f ~/.<app>/<role>-cadence ~/.<app>/<role>-guide-sha`. On a fresh
+   session also **reconcile recorded state against reality** before acting —
+   dispatch the catch-up read to a subagent and act on the state block it
+   returns ("Delegate"): the sha actually deployed vs. CURRENT STATE,
+   health now, open incidents, and any `in-progress` item addressed to your
+   role (it is yours to resume — a predecessor died mid-work; a deploy
+   recorded as started but never finished is verified before anything else).
 2. <Operators:> health checks per the monitor spec; self-heal per runbook;
    journal notable events in `<journal path>`.
 3. Scan `<bus>/next/` for items addressed `to: <x>` and **claim the
@@ -122,7 +135,8 @@ and are never deleted.
    numbers, the sha, the verification command and its result. Never just
    "done".
 8. Commit bus/journal changes immediately (`journal:` prefix); push if a
-   remote is configured.
+   remote is configured. Last, if this wake was quiet, ramp your cadence — a
+   non-quiet wake reset it already ("Liveness and re-arm").
 
 ## Write tight — every entry you produce             <!-- every role -->
 
@@ -139,7 +153,9 @@ Do not:
   earlier entry — link or name it instead.
 
 Do: name the concrete thing (path, sha, number, item id) and state the
-decision plainly.
+decision plainly. Where that concrete thing is itself long — acceptance
+criteria, an approval-request's sha and config diff, a root cause — it stays
+in full: see "Spend context where it pays".
 
 Too long (a comm entry):
 
@@ -154,6 +170,63 @@ Tight:
 
 > P3 filings are records only now — 8 held, several from pdm's own UX walks.
 > Keep filing; if something needs doing, argue for P2.
+
+## Spend context where it pays                       <!-- every role -->
+
+Your window is the budget for the whole session, and reading spends it
+faster than writing. Default to the narrow read:
+
+- `grep`, or `sed -n '<a>,<b>p'`, the lines you need out of a guide,
+  protocol or journal; read a file whole when you are about to edit it whole.
+- **This guide: gate the re-read on its sha.** `~/.<app>/<role>-guide-sha`
+  holds the sha you last read it at. Each wake,
+  `git log -1 --format=%H -- <this file>` costs a few dozen tokens, and an
+  unchanged sha skips the re-read entirely. Changed → read
+  `git diff <cached>..HEAD -- <this file>`: a dated rule append is a few
+  hundred tokens against the file's <~72k>. Read the file whole, or send a
+  subagent to read it and return what changed in §Cycle, only for a
+  structural rewrite. Write the sha that
+  `git log -1 --format=%H -- <this file>` returns, never HEAD — HEAD moves on
+  every pod commit, so caching it re-reads the file every wake — and write it
+  only after the comm read, so a `guide-update` arriving this wake still
+  finds a diff. **The gate tracks the file, not your context:** on the first
+  wake of a session and the first wake after a compaction, read the guide in
+  full whatever the sha says. A `guide-update` re-arm also reads it whole;
+  the gate does not apply to it.
+- Comm: the watermark (`~/.<app>/<role>-comm-read`) bounds each wake's read
+  to the entries you have not processed. `comm/README.md` and the day-files
+  are an arm-time read; an unread span longer than one day-file goes to a
+  subagent ("Delegate").
+- Bus: grep the address, never the filename —
+  `grep -rlE '^to: <role>$' <bus>/next/` lists your items in one pass,
+  and the frontmatter wins when a filename disagrees with it (PROTOCOL.md
+  → "Filename"). Read `status` and `priority` out of the matches before
+  any body.
+- Journal or ledger: the `## CURRENT STATE` / standing-facts head answers
+  most wakes; history is for the wake that needs history.
+- Wider than that, a subagent reads it and returns the answer ("Delegate").
+
+Measured in the loop this template came from: the operator's guide is 3,347
+lines / ~72k tokens, its comm day-file ~215 lines, `comm/README.md` ~276 —
+each one an arm-time read that no tick repeats. No single quiet tick is
+expensive; the cumulative re-reads are what force a compaction. **Gate the
+big reads, delegate the spikes, space the ticks.**
+
+Some work earns the tokens, and under-spending on it costs a whole cycle:
+
+- A root-cause investigation — a guess ships a wrong fix and the next
+  session pays to redo it.
+- A decision that is expensive to reverse: a deploy, a promotion, removing
+  shipped behavior, rejecting an item.
+- Acceptance criteria, parked-item notes, `CURRENT STATE` — a later session
+  acts on them with you gone: exact command, exact value, exact sha.
+- An `approval-request`: the exact sha and every changed key of the config
+  diff. The user approves what is written, so an omission stalls a cycle.
+
+The test: **would a thin answer here cost more than one wake?** Yes → spend
+the tokens, and name in the entry what you checked. No → the shortest true
+answer. "Write tight" governs the prose at both sizes; a thorough finding
+is still stated plainly.
 
 ## Delegate — this session orchestrates              <!-- every role -->
 
@@ -170,6 +243,36 @@ task) and pin a model by the judgment the task needs, not by who dispatches:
 - large (e.g. Opus / top tier): plan a multi-task change, whole-branch review,
   root-cause investigation, product-value audit, design spec
 
+**Delegating a quiet tick is net-negative.** A dispatch costs this session
+the prompt it writes plus the conclusion that comes back; the one-line
+`git log` behind a sha-gate costs a few dozen tokens. Delegation buys down
+the spikes, and the floor stays inline.
+
+**Bound the return.** Every dispatch says how much to send back — a verdict
+plus its one evidence line, a ranked top `<N>`, the diff, the failing test's
+output. An unbounded subagent hands back its transcript and the dispatch
+saves nothing. Never paste a subagent's report into a comm entry, a bus item
+or an `## Outcome`; write your conclusion from it.
+
+**Four dispatches recur — name the return shape and they stay bounded:**
+
+- **Fresh-session catch-up.** The step-1 reconcile reads `comm/README.md`,
+  the day-files, the journal's `CURRENT STATE`, the open items and the
+  deployed sha — ~700 lines, at arm time and again after every compaction. A
+  subagent reads them and returns one state block: deployed sha; open items
+  addressed to this role with status and priority; unprocessed comm entries;
+  open soaks and incidents. Nothing else.
+- **Comm after a gap.** The watermark handles steady state, and backing off
+  to <120> minutes makes long unread spans ordinary. Past one day-file of
+  unread entries, a subagent returns the ones addressed to you or `pod`, one
+  line each.
+- **Bus triage.** The address grep is cheap; reading four bodies to find the
+  highest-priority *actionable* one is the spike. With several open, a
+  subagent returns a ranked list of one-liners carrying item ids, and you
+  claim from it.
+- **Mechanical sweeps.** The staleness sweep (PROTOCOL rule 5) and <the
+  operator's> 7-day comm prune: small tier, returning paths or "none".
+
 This session runs on `<recommended tier>` (set with `/model` when arming).
 Doing the work inline "because it is only a few files" is how a predecessor
 filled its context by mid-day and died with an item `in-progress`.
@@ -183,7 +286,11 @@ cron, and session crons auto-expire 7 days after creation, silently. State
 lives in `~/.<app>/`:
 
 - **Heartbeat** — every tick, first:
-  `mkdir -p ~/.<app> && date "+%F %T %Z" > ~/.<app>/<role>-heartbeat`.
+  `mkdir -p ~/.<app> && echo "$(date "+%F %T %Z") <interval>m" >
+  ~/.<app>/<role>-heartbeat`. Read the interval out of
+  `~/.<app>/<role>-cadence` first so you publish the one you are actually
+  running — that number is what lets a neighbour tell a backed-off session
+  from a dead one.
 - **Cron self-renewal** — `~/.<app>/<role>-cron` records `<id> <YYYY-MM-DD>`;
   at ≥ 6 days CronDelete, CronCreate (off-minute pattern so the pod does not
   wake onto the shared tree together), rewrite. **Backstop**: CronList every
@@ -193,6 +300,37 @@ lives in `~/.<app>/`:
   everything you do looks normal. Say so in the cycle output and tell the
   user: starting `/loop` is theirs, and no neighbour can see this until your
   heartbeat goes absent or stale.
+- **Quiet-wake backoff** — an idle pod should not wake every <15> minutes for
+  a week. `~/.<app>/<role>-cadence` holds one number, `<interval-minutes>`;
+  a missing file means `<15>`. Classify every wake and rewrite it:
+  - **Quiet** requires *all* of — no **actionable** open bus item addressed
+    to you (a parked item whose `Status:` names an uncleared gate does not
+    count), no unprocessed comm entry for `<role>` or `pod`, nothing you hold
+    `in-progress`, nothing **of yours** to commit (a neighbour's dirty file
+    in a shared checkout is the normal state, not your work), <operators:>
+    and no health-state transition this wake. Anything you could not check —
+    a grep that errored, a sync that exited non-zero, an env you could not
+    reach — counts as **not quiet**.
+  - Quiet → `interval = min(interval × 2, <120>)`: <15 → 30 → 60 → 120>
+    minutes. The cap is an absolute ceiling, not a number of doublings — a
+    role whose base is already <60> stops at <120> like everyone else. Not
+    quiet → write `<15>` **the moment you know**, ahead of the work, no ramp
+    down.
+  - When the interval changes, CronDelete and CronCreate at the new one and
+    rewrite `~/.<app>/<role>-cron` with the new id and **today's** date — that
+    rewrite is itself a renewal, so the day-6 rule measures from it, the date
+    on disk stays truthful, and the two rules never fight. An unchanged
+    interval writes no cron, and day 6 renews as usual.
+  - **Carry the fire prompt, and your off-minute offset, across every
+    rewrite.** CronCreate freezes a fresh copy on every interval change —
+    each ramp step and every reset back to base — so write the same text each
+    time (the pointer form below), keep the stagger that stops the pod waking
+    onto the shared tree together (15/30/60/120 all divide each other, so two
+    personas that started on the same minute would otherwise collide at every
+    wake), and check it with CronList after. A backoff that quietly reworded
+    its own fire prompt is the frozen-copy trap arriving by a new route.
+  - **The cap costs latency**: at <120> minutes an item a neighbour files
+    waits up to two hours before you read it, a P1 included.
 - **The fire prompt POINTS at this guide, it never restates it.** A cron's
   fire prompt is a **frozen copy** taken when the cron was created: editing
   this guide does not reach it, nothing warns you, and the stale text keeps
@@ -218,9 +356,13 @@ lives in `~/.<app>/`:
     it ran and died, absent says it never ran. Never explain it away as "the
     check is newer than that session": that reasoning never expires on its
     own, and it is how an unlooped persona stays invisible for weeks.
-  - **STALE** (file exists) → `down` when older than <45> minutes **and** no
-    commit on `main` since (age alone cries wolf — sessions commit between
-    heartbeats).
+  - **STALE** (file exists) → `down` when older than **3× the interval that
+    heartbeat publishes** (45 min for a writer on <15>, 6 h for one backed
+    off to <120>) **and** no commit on `main` since (age alone cries wolf —
+    sessions commit between heartbeats). Read the interval off the file and
+    measure against it: a fixed window files every backed-off neighbour as
+    `down` and sends the user to re-arm a healthy session. A heartbeat
+    carrying no interval is a writer on <15> — use 3 × <15>.
 
   **This is the only check in the system that can catch a never-looped
   persona, so it has to hold.** A session's own `CronList` backstop cannot:
@@ -245,7 +387,9 @@ lives in `~/.<app>/`:
 `comm/README.md`. One file per day, append-only, tracked, committed at once
 (`comm:` prefix, named paths). Every wake after the sync, read today's and
 yesterday's files and act on entries newer than `~/.<app>/<role>-comm-read`
-addressed to `<role>` or `pod`. Post there what a neighbour needs within a
+addressed to `<role>` or `pod`. `README.md` and the back day-files are an
+arm-time read; an unread span longer than one day-file goes to a subagent
+("Delegate"). Post there what a neighbour needs within a
 wake — a `guide-update` whenever you change any `*-loop-prompt.md` (file +
 sha), `down`, `breach`, `handoff`, `note` — and nothing of record: rules go
 into guides, facts into the ledger, work into task or bus items. <Operator
@@ -489,9 +633,13 @@ rule that now prevents it. Append; never prune.>
   tails the file misses same-day entries.
 - **Every rule that was learned carries its date and cause.** That is what lets a
   later reader judge whether the rule still applies.
-- **The "Delegate" section is not optional for any role**, and the engineer's
-  discipline block is copied into each implementer subagent prompt rather than
-  referenced — a subagent cannot read this file's context.
+- **The "Delegate" and "Spend context where it pays" sections are not optional for any
+  role**, and the engineer's discipline block is copied into each implementer subagent
+  prompt rather than referenced — a subagent cannot read this file's context.
+- **Backoff and the staleness window are one change.** A cadence that doubles
+  on quiet wakes, while the heartbeat publishes only a timestamp or the window
+  stays a fixed number of minutes, files every backed-off persona as `down`
+  and sends the user to re-arm a healthy session.
 - **Renaming a persona:** keep the filename of its ledger/journal so existing links
   resolve; widen the heading; note the rename date in the prompt and in every other
   persona's scope section that mentions it.

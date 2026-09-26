@@ -14,8 +14,10 @@ Nothing here starts work. If a step wants a decision, park the item and move on.
 - [ ] List this session's session-only tasks and **copy each exact invocation into the
       prompt's `## RE-ARM` section before deleting it**: crons, Monitor tasks, any
       background watcher. The invocation, not a description of it.
-- [ ] Delete them (`CronList` → `CronDelete`), and clear the recorded cron id:
-      `rm -f ~/.<app>/<role>-cron`.
+- [ ] Delete them (`CronList` → `CronDelete`), and clear the recorded cron id and
+      the cadence/guide-sha state, so a successor does not inherit a dead session's
+      backoff or believe it has already read the guide:
+      `rm -f ~/.<app>/<role>-cron ~/.<app>/<role>-cadence ~/.<app>/<role>-guide-sha`.
 - [ ] **Do not touch `~/.<app>/<role>-heartbeat`.** It goes stale on its own; absent
       would mean "never looped" and is reported by a neighbour at once.
 - [ ] From this point: claim nothing new from the bus.
@@ -29,7 +31,7 @@ git fetch -q origin && git merge --ff-only origin/main   # never pull --rebase h
 sed -n '1,200p' docs/operation/<app>/comm/$(date +%F).md
 
 # Items you claimed — READ the status lines, never count files
-grep -HE '^(to|status|priority):' <bus>/next/*-to-<role>-*.md
+grep -rlE '^to: <role>$' <bus>/next/   # then read status/priority from the matches
 
 # Workspace
 git status --porcelain                       # yours vs. a neighbour's dirty files
@@ -89,6 +91,9 @@ historical)` and insert on top:
 - Unmonitored since <HH:MM TZ>: <env> — <what no longer self-heals>
 - First thing to verify: <the one check whose answer changes what you do next>
 ```
+
+One line per bullet, each a fact the successor cannot re-derive from git, the bus or
+the journal — and the sha, value or command it must act on written out exactly.
 
 Then append any rule this session learned, dated with its one-line cause — and, if an
 incident bit, a `## Traps that have already bitten` entry.
@@ -156,7 +161,7 @@ created: <date>
 ## 10. Verify, then declare
 
 ```sh
-grep -l '^status: in-progress' <bus>/next/*-to-<role>-*.md   # expect: no matches
+grep -rlE '^to: <role>$' <bus>/next/ | xargs grep -l '^status: in-progress'  # expect: none
 git status --porcelain                                        # expect: nothing of yours
 git log --oneline origin/<branch>..HEAD                       # expect: empty
 git worktree list                                             # expect: matches CURRENT STATE

@@ -60,7 +60,9 @@ Not for: a one-off task, or a single short-lived session (just write a plan).
    file dumps. The model tier is chosen per task by complexity — small for mechanical
    lookups, medium (e.g. Sonnet) for general coding and per-task reviews, large for
    planning, whole-branch review, and root-cause work (table in
-   `references/archetypes.md` → "Delegation and model tiers").
+   `references/archetypes.md` → "Delegation and model tiers"). Each dispatch also
+   names how much to send back — a verdict and its evidence line, a ranked list, the
+   diff — and the session writes its own conclusion from what returns.
 8. **Someone owns "less".** Every other role adds: findings, fixes, features, rules.
    The product-manager persona exists to subtract — features that do not serve the core
    value, UX steps that add friction, process that gates nothing. Feature-requests route
@@ -69,6 +71,10 @@ Not for: a one-off task, or a single short-lived session (just write a plan).
    channel.** The live sessions of one app form a *pod*. Two personas are
    **required** — the operator and the engineer — and each watches the other's
    heartbeat; every other role is optional and its queue waits while it is down.
+   A quiet wake lengthens the interval: base → 2× → 4× → 8×, to an absolute cap. Each
+   heartbeat therefore publishes the interval it was written at, and staleness
+   is measured against *that* interval — a fixed window files every backed-off
+   neighbour as `down`.
    The operator also owns **non-technical** work (docs, guides, bookkeeping, process,
    data fixes through the API): a task's `Owner:` line routes it. Pod members talk
    between wakes through a **shared comm**: one day-file, append-only, read every
@@ -96,7 +102,12 @@ Not for: a one-off task, or a single short-lived session (just write a plan).
    from `references/persona-prompt-template.md`, plus `docs/operation/<app>/README.md`
    (persona table). Personas of different apps are **mutually out of scope** — say so in
    every prompt. Keep the template's "Write tight" section — every comm entry, bus
-   outcome, journal line, and cycle report the persona produces stays concise.
+   outcome, journal line, and cycle report the persona produces stays concise — and
+   "Spend context where it pays": narrow reads (grep ranges, the comm watermark,
+   the frontmatter address grep `grep -rlE '^to: <role>$' <bus>/next/`), the sha
+   gate that skips re-reading an unchanged guide, bounded subagent returns, and the
+   cases where thoroughness is cheaper than a second cycle (root cause, anything
+   irreversible, acceptance criteria, approval-requests).
 5. **Make the dangerous boundaries structural**, not prose: a permission hook that
    denies prod-file edits, a checked-in monitor script (never rebuilt from prose each
    session), read-only DB wrappers for non-operators, and — whenever two sessions
@@ -114,16 +125,22 @@ Not for: a one-off task, or a single short-lived session (just write a plan).
 8. **Arm the required pair first** (operator, then engineer), then the optional
    roles: paste each prompt into its own fresh session, set the session model to
    the persona's recommended tier (`/model`), then `/loop <interval>`
-   (operators ~900 s, engineer/research ~1800 s, product manager ~3600 s). From
-   then on a guide edit is a `guide-update` in the comm and the persona re-arms
-   itself; a dead session is the only thing that needs a human paste again.
+   (operators ~900 s, engineer/research ~1800 s, product manager ~3600 s).
+   Those are **base** intervals: a persona whose wake finds nothing doubles its own
+   interval to a cap (the template works 15 → 30 → 60 → 120 min) and returns to base
+   on the first non-quiet wake. Choose the cap with its latency in view — at 120 min
+   an item a neighbour files waits up to two hours before anyone reads it, a P1
+   included. From then on a guide edit is a `guide-update` in the comm and the
+   persona re-arms itself; a dead session is the only thing that needs a human
+   paste again.
 9. **Verify each arming actually took** — `/loop` is a separate step from
    pasting the prompt, and a persona that got the paste but not the loop looks
    *fine*: it answers, it works, it commits. It simply never wakes again.
    Per persona, before moving on: `CronList` is non-empty in that session, and
-   `~/.<app>/<role>-heartbeat` **exists** on disk. Then confirm the pair sees
-   each other — each required persona's first wake should read its neighbour's
-   heartbeat and find it. A `~/.<app>/` holding heartbeats for some roles and
+   `~/.<app>/<role>-heartbeat` **exists** on disk, carrying a timestamp and an
+   interval. Then confirm the pair sees each other — each required persona's
+   first wake should read its neighbour's heartbeat and find it. A `~/.<app>/`
+   holding heartbeats for some roles and
    not others is the signature of this failure, and it is worth an explicit
    `ls ~/.<app>/` at the end of setup.
 10. **Know how to stand down.** Closing a window is not a shutdown: an item left
@@ -143,7 +160,11 @@ Not for: a one-off task, or a single short-lived session (just write a plan).
 | Item finished by one role, next step another's | close it; file a **new** item | one item spanning two roles |
 | Feature-request (anything beyond a bug fix) | product manager: cut, shrink, or forward `to-eng` | engineer absorbing it as specified |
 | Removing shipped behavior, a whole feature, a persona | `to-user` proposal from the product manager | product manager or engineer removing it directly |
-| Non-trivial work inside any session | a subagent, model tier by complexity | the session doing it inline |
+| Non-trivial work inside any session | a subagent, model tier by complexity, return shape named in the dispatch | the session doing it inline, or a subagent answering with a transcript |
+| One fact out of a guide, journal, ledger or bus directory | grep, a `sed -n` range, the comm watermark, a `^to: <role>$` grep over `next/` | `cat` of the whole thing, every wake |
+| A guide the session already read once | the sha gate: `git log -1 --format=%H -- <guide>`, then `git diff <cached>..HEAD` on a change | re-reading ~72k tokens of guide to find a three-line dated append |
+| A wake that finds nothing to do | double the interval to a cap, and publish the interval in the heartbeat | delegating the quiet tick, or leaving the staleness window a fixed number of minutes |
+| A root cause, an irreversible decision, acceptance criteria, an approval-request | the tokens it takes to get right the first time | skimping, and burning the next cycle on the gap |
 | Non-technical change (docs, a guide, index bookkeeping, process, a data fix through the API) | operator, via a task with `Owner: operator` | engineer spending a cycle on it |
 | Something a neighbour needs *this wake* (a guide changed, a required persona is down, a breach) | shared comm day-file | a task file, a prompt edit, or the user |
 | Anything that must outlive a week | guide (rule), ledger (fact), task file (work) | the comm |
@@ -168,9 +189,23 @@ Not for: a one-off task, or a single short-lived session (just write a plan).
 - **Stale task files** — re-verify line references and "still broken" claims against
   the main branch before scoping.
 - **Outcome = "done"** — outcomes carry numbers, verdicts, shas, links.
+- **Re-reading the world each wake** — `cat`ting a whole guide, journal or bus
+  directory every wake spends the session's lifespan on text it already has. Grep it,
+  `sed -n` a range, use the comm watermark and a `^to: <role>$` grep, read a journal's
+  CURRENT STATE head, and gate the guide on its sha — `git log -1 --format=%H` costs
+  a few dozen tokens and skips a ~72k-token re-read while the sha holds (a live
+  operator invented that gate against its own 3,347-line guide). No single quiet tick
+  is expensive; the cumulative re-reads are what force a compaction. The opposite
+  failure costs as much: a thin root-cause pass, vague acceptance criteria, or an
+  approval-request missing a config key burns the next cycle asking.
 - **Session does the work itself** — "it's only a few files" is how a loop session
   fills its context by mid-day and dies with an item `in-progress`. Dispatch; keep
   the conclusion.
+- **Delegating the floor** — a dispatch costs the parent the prompt it writes plus
+  the conclusion that returns, more than the one-line `git log` a quiet tick needs.
+  Delegate the spikes — a fresh session's ~700-line catch-up reconcile, a comm span
+  longer than a day-file, triage across several open items, a mechanical sweep — and
+  leave the quiet tick inline.
 - **Feature absorbed as specified** — a request is a symptom of a need; the product
   manager names the need, then finds the smallest change (often a removal) that
   serves it. Adding is the default of every other role, so the check is structural,
@@ -212,3 +247,8 @@ Not for: a one-off task, or a single short-lived session (just write a plan).
   taxonomy that had no slot for it). Never write a dated grace clause for a
   missing heartbeat — "it only means that session predates this check" has no
   expiry and permanently disarms the one signal that catches this.
+- **Backed off, reported `down`** — a persona that doubles its cadence on quiet
+  wakes carries a heartbeat as old as its current interval. A neighbour measuring
+  against a fixed window files it `down`, and the user is sent to re-arm a healthy
+  session. The heartbeat publishes the interval it was written at, and the reader
+  measures against that (3× it, and no commits on `main` since).

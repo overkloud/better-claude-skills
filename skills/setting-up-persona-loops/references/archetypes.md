@@ -21,6 +21,17 @@ comm, headline, tell the user; no persona restarts another). Every other role
 is optional; a down optional role means its queue waits, not that another role
 absorbs its remit. Arm the pair first.
 
+**Cadence backs off when nothing happens.** The intervals above are the base: a
+persona whose wake finds nothing open, nothing unread, nothing claimed and
+nothing to commit doubles its own interval until it reaches the cap (900 s →
+1800 → 3600 → 7200; the cap is an absolute ceiling, so a role whose base is
+already 3600 s stops at 7200 s too) and drops back to base on the first wake
+that is not quiet. Its heartbeat
+publishes the interval it is running so a neighbour measures staleness against
+that, and the cap is chosen knowing its latency — at two hours, an item filed
+to a quiet persona waits that long (`persona-prompt-template.md` → "Liveness
+and re-arm").
+
 **Why operator and implementer are separate sessions:** an operator must stay
 responsive on a short poll and never be mid-refactor when the system wedges;
 implementation wants worktrees, subagents, reviews, and hours of attention. The
@@ -189,8 +200,16 @@ life. The session reads the bus, decides, dispatches, and records — it does no
 read forty files to find one fact, run a review, or implement a task itself.
 Rule of thumb: **if the work would return more than a screen of tool output, a
 subagent does it and returns the conclusion.** Prompts to subagents are
-self-contained (the subagent sees only its task) and carry the discipline block
-above when the task changes code.
+self-contained (the subagent sees only its task), name the size of the answer
+to send back (a verdict plus its evidence line, a ranked top N, the diff), and
+carry the discipline block above when the task changes code.
+
+The floor stays inline: a dispatch costs the parent its prompt plus the
+returned conclusion, so delegating a quiet tick's one-line `git log` spends
+more than it saves. Delegate the spikes — a fresh session's catch-up read, a
+comm span longer than a day-file, triage across several open items, a
+mechanical sweep — and gate the big recurring reads on a sha
+(`persona-prompt-template.md` → "Spend context where it pays").
 
 Pick the tier by the judgment the task needs, not by the persona doing it:
 

@@ -64,7 +64,8 @@ created: YYYY-MM-DD
 Body: what/why, acceptance criteria, links to reports/plans/data — plainly
 stated, no more than the receiving role needs (`*-loop-prompt.md` → "Write
 tight"). Items must be self-contained — the receiving session acts without
-the author being alive.
+the author being alive — so spell out in full the exact command, value, sha
+and acceptance criterion it must act on. That detail is the item's payload.
 
 **Priority is P1/P2/P3 — there is no P0.** "Drop everything" is a P1 that says
 so in the body and sorts first within P1; any other token is malformed (rule 6).
@@ -81,8 +82,8 @@ so in the body and sorts first within P1; any other token is malformed (rule 6).
    reason). Outcomes are numbers, shas, verdicts, the verification command
    and its result — never just "done" and never narration
    (`*-loop-prompt.md` → "Write tight"). **One item never spans two roles.**
-   When one role's part is finished, its item is `done` and the next step is a **new** item addressed
-   to the next role. Holding an item open waiting on another role hides it
+   When one role's part is finished, its item is `done` and the next step is
+   a **new** item addressed to the next role. Holding an item open waiting on another role hides it
    from the staleness rule.
 3. **Approval-requests** name the exact sha, the exact config diff (every
    changed `KEY=VALUE` line), the cost cap, and the transition. Anything

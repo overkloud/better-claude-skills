@@ -10,10 +10,10 @@ Replace `<app>`, `<roles>`, `<bus>`, `<todo dir>` from the pod's README
 
 ```sh
 ls -l  ~/.<app>/*-heartbeat            # who is armed at all; absent = never looped
-date; cat ~/.<app>/*-heartbeat         # ages: fresh / stale
+date; cat ~/.<app>/*-heartbeat         # ages, and the interval each publishes
 git fetch -q origin && git merge --ff-only origin/main
 sed -n '1,200p' docs/operation/<app>/comm/$(date +%F).md   # today's traffic
-grep -HE '^(to|status):' <bus>/next/*.md                   # open claims, by role
+grep -rHE '^(to|status):' <bus>/next/                      # open claims, by role
 grep -HiE '^(\*\*)?(Status|Owner)' <todo dir>/<app>_*.md   # the no-bus queue
 git worktree list                                          # unmerged work
 ```
@@ -41,7 +41,8 @@ close your claims, write CURRENT STATE, journal, commit named paths, push, post
 `note: pod down`. Expect the last ack by <HH:MM = now + slowest cadence>.
 ```
 
-Commit and push at once — an unpushed order reaches nobody:
+Point at the procedure and stop there — everyone live reads this entry, and their
+guides carry the steps. Commit and push at once — an unpushed order reaches nobody:
 
 ```sh
 git commit -m "comm: shutdown order to pod" -- docs/operation/<app>/comm/$(date +%F).md
@@ -50,11 +51,14 @@ git push
 
 ## 3. The wait
 
-| Role | Cadence | Ack expected by |
+| Role | Base cadence | Ack expected by |
 |---|---|---|
-| operator / prod | ~900 s | now + 15 min |
-| engineer / research | ~1800 s | now + 30 min |
-| product manager | ~3600 s | now + 60 min |
+| operator / prod | ~900 s | now + the interval its heartbeat publishes |
+| engineer / research | ~1800 s | now + the interval its heartbeat publishes |
+| product manager | ~3600 s | now + the interval its heartbeat publishes |
+
+A backed-off persona publishes a longer interval than its base — read the number off
+`~/.<app>/<role>-heartbeat` rather than the middle column, which is only the floor.
 
 Poll rather than block. Between checks there is nothing to do — a persona mid-wake
 finishes its stand-down without help. The fast path for an impatient user is per role:
@@ -66,7 +70,7 @@ open that window and run `shutting-down-current-persona` there.
 git fetch -q origin && git merge --ff-only origin/main
 grep -n 'stood down' docs/operation/<app>/comm/$(date +%F).md   # the acks
 ls -l ~/.<app>/*-heartbeat; date                                 # fresh / stale / absent
-grep -l '^status: in-progress' <bus>/next/*.md                   # expect: no matches
+grep -rl '^status: in-progress' <bus>/next/                     # expect: no matches
 grep -HiE '^(\*\*)?Status: *in-progress' <todo dir>/<app>_*.md   # expect: no matches
 git status --porcelain                                           # expect: nothing left dirty
 git log --oneline -5                                             # the stand-down commits
@@ -127,6 +131,9 @@ the Status line of a task claimed by a dead session is changed only by that role
 each arming took: `CronList` non-empty in that session, and `ls ~/.<app>/` shows a
 heartbeat per role.
 ```
+
+One row per role and one line per fact: the user acts on this report, so it carries
+the verdicts and the exact pastes, with no recap of the wait.
 
 If any verification came back non-empty, say so plainly and name what is still open. A
 pod reported as down while a session is still looping is worse than no report: the user

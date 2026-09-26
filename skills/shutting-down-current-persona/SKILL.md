@@ -26,7 +26,8 @@ re-arms it. Setting a loop up is `setting-up-persona-loops`.
 - The user wants to close this session — machine going down, done for the day, or
   the session is being moved to another checkout or model tier.
 - Context is nearly exhausted and the clean move is a handover to a successor session
-  rather than dying mid-item.
+  rather than dying mid-item. Start it with window to spare: the stand-down itself
+  spends tokens on reading, parking, and the verification step.
 - A session is wedged and will be replaced.
 
 Not for: retiring a persona permanently (a `to-user` proposal, then a removal — see
@@ -73,8 +74,11 @@ entry). Order matters; the first step is what makes the rest safe.
    successor loses it. Never delete a worktree holding unmerged work.
 6. **Write the handover into the prompt file.** A new `## CURRENT STATE (<date time
    TZ>)` block on top, the previous one moved under `## Previous state`. Chat does not
-   survive this session; the prompt file is the only channel to the successor. Pay the
-   prompt debt here too: any rule this session learned goes in dated, with its cause.
+   survive this session; the prompt file is the only channel to the successor. Carry
+   what it cannot reconstruct from git, the bus and the journal — deployed sha, open
+   soak and its T0, where each parked item got to, the first check to run — each
+   stated exactly enough to act on. Pay the prompt debt here too: any rule this
+   session learned goes in dated, with its cause.
 7. **Journal the stand-down** — append-only, your own section in the day-file: when you
    stood down, why, what was left open.
 8. **Commit, push, and tell the pod.** Commit **named paths only** (`git commit -m …
@@ -118,6 +122,7 @@ closing spends an hour and dies mid-merge anyway.
 | Worktree with unmerged work | recorded in CURRENT STATE (path, branch, last commit, test state) | deleted, or left with uncommitted changes |
 | What you learned today | a dated rule in the prompt file | in the chat transcript |
 | Deployed sha, open soak, incident | the new CURRENT STATE block | in your head |
+| The handover's content | what the successor cannot reconstruct from git, the bus and the journal, stated exactly | a narrative of the session's day |
 | Any commit | pushed, named paths only | `git add -A`, a directory pathspec, `commit -a` |
 | Your heartbeat file | left in place to go stale, explained by your comm ack | deleted — that reads as "never looped" |
 | The fact that you stopped | an `ack: <role> stood down` in the comm | silence, and a neighbour filing you as `down` |
@@ -141,6 +146,10 @@ closing spends an hour and dies mid-merge anyway.
   choose an interpretation. Park it with the question.
 - **Deleting a worktree to leave things clean** — clean is not the goal; resumable is.
   Unmerged work is deleted only by the session that decides to abandon it.
+- **A handover that retells the day** — the successor reads this block on a fresh
+  window and pays for every line. Each one is a fact it cannot re-derive from git,
+  the bus or the journal; the exact sha, value or command it must act on stays
+  spelled out in full.
 - **A CURRENT STATE block with no timezone, or appended at the bottom** — blocks are
   newest-first and dated with a TZ; a successor that tails the file misses same-day
   entries.
